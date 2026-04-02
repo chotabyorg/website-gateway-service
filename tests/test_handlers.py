@@ -4,12 +4,11 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from api.handlers import handle_chat, handle_health, handle_root
-from api.middleware import cors_middleware
 from services.widget_key_manager import WidgetInfo
 
 
 def _make_app(key_manager=None, core_api=None) -> web.Application:
-    app = web.Application(middlewares=[cors_middleware])
+    app = web.Application()
     app["key_manager"] = key_manager or MagicMock()
     app["core_api"] = core_api or AsyncMock()
     app.router.add_post("/v1/chat", handle_chat)
