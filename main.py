@@ -4,6 +4,7 @@ import contextlib
 from aiohttp import web
 
 from api.handlers import handle_chat, handle_health, handle_root
+from api.middleware import cors_middleware
 from core.config import settings
 from core.logger import logger, setup_logging
 from services.control_plane_client import ControlPlaneClient
@@ -25,7 +26,7 @@ async def main() -> None:
     if key_manager.active_count() == 0:
         logger.warning("No active WEBSITE_WIDGET integrations found on startup")
 
-    app = web.Application()
+    app = web.Application(middlewares=[cors_middleware])
     app["key_manager"] = key_manager
     app["core_api"] = core_api
 
