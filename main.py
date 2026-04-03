@@ -3,7 +3,7 @@ import contextlib
 
 from aiohttp import web
 
-from api.handlers import handle_chat, handle_health, handle_root
+from api.handlers import handle_chat, handle_config, handle_health, handle_root
 from api.middleware import cors_middleware
 from core.config import settings
 from core.logger import logger, setup_logging
@@ -31,6 +31,7 @@ async def main() -> None:
     app["core_api"] = core_api
 
     app.router.add_post("/v1/chat", handle_chat)
+    app.router.add_get("/v1/config", handle_config)
     app.router.add_get("/health", handle_health)
     app.router.add_get("/", handle_root)
 

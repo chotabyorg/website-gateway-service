@@ -40,6 +40,24 @@ async def handle_chat(request: web.Request) -> web.Response:
     return web.json_response({"reply": reply, "session_id": session_id})
 
 
+async def handle_config(request: web.Request) -> web.Response:
+    key = request.rel_url.query.get("key")
+    if not key:
+        return web.json_response({"error": "Missing key parameter"}, status=400)
+
+    key_manager = request.app["key_manager"]
+    widget_info = key_manager.validate_key(key)
+    if widget_info is None:
+        return web.json_response({"error": "Invalid widget key"}, status=404)
+
+    return web.json_response({
+        "primary_color": widget_info.config.get("primary_color", "#6C5CE7"),
+        "position": widget_info.config.get("position", "bottom-right"),
+        "welcome_message": widget_info.config.get("welcome_message", "Привет! Чем могу помочь?"),
+        "window_title": widget_info.config.get("window_title", "Чат с ассистентом"),
+    })
+
+
 async def handle_health(request: web.Request) -> web.Response:
     key_manager = request.app["key_manager"]
     return web.json_response({"status": "ok", "active_widgets": key_manager.active_count()})
