@@ -1,0 +1,15 @@
+name: Deploy
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    uses: chotabyorg/gitops/.github/workflows/reusable-deploy.yaml@main
+    with:
+      service: website-gateway-service
+      gitops_repo: chotabyorg/gitops
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
