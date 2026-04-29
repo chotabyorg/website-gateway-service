@@ -13,3 +13,5 @@ jobs:
       contents: read
       packages: write
       id-token: write
+    secrets:
+      GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
