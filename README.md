@@ -17,11 +17,11 @@
   └── POST /v1/chat                  (X-Widget-Key: wk_abc123)
   │
   ▼
-website-gateway-service :55590
-  │
-  ├── WidgetKeyManager — кэш валидных ключей (reconcile из control-plane каждые 60с)
-  │     └── GET /v1/internal/integrations?channel_type=WEBSITE_WIDGET
-  │           (заголовок X-Internal-Token: $INTERNAL_API_TOKEN)
+website-gateway-service
+   │
+   ├── WidgetKeyManager — кэш валидных ключей (reconcile из control-plane каждые 60с)
+   │     └── GET /v1/internal/integrations?channel_type=WEBSITE_WIDGET
+   │           (заголовок X-Internal-Token: $INTERNAL_API_TOKEN)
   │
   ├── ChatHandler — обработка входящих сообщений
   │     ├── Валидация X-Widget-Key
@@ -33,11 +33,9 @@ website-gateway-service :55590
   └── GET /health
 ```
 
-Widget traffic path: whether виджет ходит напрямую (:55590) или через chota-gateway (:55560) — requires verification in the krakend.json audit (Phase 2).
+Widget traffic path: whether виджет ходит напрямую или через chota-gateway — requires verification in the krakend.json audit (Phase 2).
 
-### Notes
 
-Gateway services run outside shared Docker network by design — they address internal services via host IP (see `.env.example`, `CONTROL_PLANE_URL` / `AI_AGENT_SERVICE_URL` using `45.144.55.73:<port>`).
 
 ## Эндпоинты
 
@@ -121,10 +119,10 @@ Content-Type: application/json
 
 | Переменная | Обязательная | По умолчанию | Описание |
 |------------|-------------|--------------|----------|
-| `CONTROL_PLANE_URL` | нет | `http://localhost:55580` | URL control-plane-service |
+| `CONTROL_PLANE_URL` | нет | `http://control-plane-service` | URL control-plane-service |
 | `INTERNAL_API_TOKEN` | нет | `""` | S2S-токен, отправляется в control-plane в заголовке `X-Internal-Token` |
 | `INTEGRATIONS_POLL_INTERVAL` | нет | `60` | Интервал reconcile с control-plane (секунды) |
-| `AI_AGENT_SERVICE_URL` | нет | `http://localhost:55570` | URL ai-agent-service |
+| `AI_AGENT_SERVICE_URL` | нет | `http://ai-agent-service` | URL ai-agent-service |
 | `HOST` | нет | `0.0.0.0` | Хост сервера |
 | `PORT` | нет | `8080` | Порт сервера |
 | `ALLOWED_ORIGINS` | нет | `*` | *Currently the middleware echoes the request Origin regardless of this value (see `docs/FOUND_BUGS.md` B-001). The variable is reserved for future whitelist implementation.* |
@@ -206,8 +204,6 @@ python main.py
 ```bash
 docker compose up -d
 ```
-
-Внешний порт: `55590` (маппится на внутренний `8080`).
 
 ## Тесты
 
