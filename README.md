@@ -123,6 +123,7 @@ Content-Type: application/json
 | `INTERNAL_API_TOKEN` | нет | `""` | S2S-токен, отправляется в control-plane в заголовке `X-Internal-Token` |
 | `INTEGRATIONS_POLL_INTERVAL` | нет | `60` | Интервал reconcile с control-plane (секунды) |
 | `AI_AGENT_SERVICE_URL` | нет | `http://ai-agent-service` | URL ai-agent-service |
+| `AI_AGENT_REQUEST_TIMEOUT_SECONDS` | нет | `120` | Read timeout ожидания ответа от ai-agent-service при обработке widget chat request |
 | `HOST` | нет | `0.0.0.0` | Хост сервера |
 | `PORT` | нет | `8080` | Порт сервера |
 | `ALLOWED_ORIGINS` | нет | `*` | *Currently the middleware echoes the request Origin regardless of this value (see `docs/FOUND_BUGS.md` B-001). The variable is reserved for future whitelist implementation.* |
