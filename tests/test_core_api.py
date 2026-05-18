@@ -40,3 +40,27 @@ async def test_send_message_returns_fallback_on_error():
     assert "недоступен" in result
 
     await client.close()
+
+
+def test_client_uses_configured_read_timeout(load_module, monkeypatch):
+    monkeypatch.setenv("AI_AGENT_REQUEST_TIMEOUT_SECONDS", "75")
+    core_api = load_module("services.core_api")
+
+    client = core_api.CoreAPIClient(base_url="http://ai-agent-service")
+
+    assert client.client.timeout.connect == 5.0
+    assert client.client.timeout.read == 75.0
+    assert client.client.timeout.write == 30.0
+    assert client.client.timeout.pool == 10.0
+
+
+@pytest.mark.asyncio
+async def test_send_message_returns_fallback_on_timeout():
+    client = CoreAPIClient(base_url="http://ai-agent-service")
+    client.client.post = AsyncMock(side_effect=httpx.ReadTimeout("too slow"))
+
+    result = await client.send_message("agent-1", "sess-1", "Hi")
+
+    assert "слишком много времени" in result
+
+    await client.close()
