@@ -16,7 +16,7 @@ async def test_send_message_success():
 
     result = await client.send_message("agent-1", "sess-1", "Hi")
 
-    assert result == "Hello there!"
+    assert result == "    Hello there!"
     client.client.post.assert_awaited_once_with(
         "/v1/chat/completions",
         json={
@@ -26,6 +26,28 @@ async def test_send_message_success():
             "message": "Hi",
         },
     )
+
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_send_message_formats_markdown_answer():
+    client = CoreAPIClient(base_url="http://ai-agent-service")
+
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "answer": "# Заголовок\n\nТекст с **жирным**\n\n- пункт",
+        "session_id": "sess-1",
+    }
+    client.client.post = AsyncMock(return_value=response)
+
+    result = await client.send_message("agent-1", "sess-1", "Hi")
+
+    assert "    Заголовок" in result
+    assert "жирным" in result
+    assert "**" not in result
+    assert "\u2022 пункт" in result
 
     await client.close()
 

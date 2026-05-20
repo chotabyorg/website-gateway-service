@@ -4,6 +4,7 @@ import httpx
 
 from core.config import settings
 from core.logger import logger
+from services.text_formatter import format_agent_reply_for_website
 
 
 TIMEOUT_FALLBACK_REPLY = "Ответ занимает слишком много времени. Попробуйте еще раз чуть позже."
@@ -42,7 +43,7 @@ class CoreAPIClient:
                 session_id,
                 response.status_code,
             )
-            return str(data.get("answer", ""))
+            return format_agent_reply_for_website(str(data.get("answer", "")))
         except httpx.TimeoutException as exc:
             elapsed = perf_counter() - started_at
             logger.error(
