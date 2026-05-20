@@ -26,6 +26,19 @@ _INLINE_TAG_RE = re.compile(
     r"<\s*/?\s*(strong|b|em|i|span|a|code|small|mark|sub|sup)\b[^>]*>",
     re.IGNORECASE,
 )
+_PAIRED_OPEN_TAG_RE = re.compile(
+    r"<\s*([A-Za-z][A-Za-z0-9:-]*)\s*>(?=.*?</\s*\1\s*>)",
+    re.IGNORECASE | re.DOTALL,
+)
+_CLOSING_TAG_RE = re.compile(r"</\s*[A-Za-z][A-Za-z0-9:-]*\s*>", re.IGNORECASE)
+_ATTR_TAG_RE = re.compile(
+    r"</?\s*[A-Za-z][A-Za-z0-9:-]*\s+[^<>]*>",
+    re.IGNORECASE,
+)
+_SELF_CLOSING_TAG_RE = re.compile(
+    r"<\s*[A-Za-z][A-Za-z0-9:-]*\s*/\s*>",
+    re.IGNORECASE,
+)
 _MARKDOWN_LINK_RE = re.compile(r"!?\[([^\]]+)\]\(([^)\s]+(?:\s+\"[^\"]*\")?)\)")
 _AUTOLINK_RE = re.compile(r"<(https?://[^<>\s]+)>", re.IGNORECASE)
 _INLINE_CODE_RE = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
@@ -39,28 +52,34 @@ def format_plain_text_reply(raw_reply: object) -> str:
     """Convert raw Markdown/HTML-ish model output into readable widget text."""
     text = "" if raw_reply is None else str(raw_reply)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text, code_blocks = _extract_fenced_code_blocks(text)
+    text, protected_segments = _extract_protected_segments(text)
     text = _format_non_code_text(text)
-    text = _restore_fenced_code_blocks(text, code_blocks)
+    text = _restore_protected_segments(text, protected_segments)
     return _normalize_spacing(text)
 
 
-def _extract_fenced_code_blocks(text: str) -> tuple[str, list[str]]:
-    code_blocks: list[str] = []
+def _extract_protected_segments(text: str) -> tuple[str, list[str]]:
+    protected_segments: list[str] = []
 
-    def replace(match: re.Match[str]) -> str:
+    def store(value: str) -> str:
+        placeholder = f"CHOTAPROTECTEDTOKEN{len(protected_segments)}CHOTA"
+        protected_segments.append(value)
+        return placeholder
+
+    def replace_fenced_code(match: re.Match[str]) -> str:
         leading_newline = match.group(1)
         code = match.group(3).strip("\n")
-        placeholder = f"CHOTACODEBLOCKTOKEN{len(code_blocks)}CHOTA"
-        code_blocks.append(code)
-        return f"{leading_newline}{placeholder}"
+        return f"{leading_newline}{store(code)}"
 
-    return _FENCED_CODE_RE.sub(replace, text), code_blocks
+    text = _FENCED_CODE_RE.sub(replace_fenced_code, text)
+    text = _INLINE_CODE_RE.sub(lambda match: store(match.group(1)), text)
+    text = _AUTOLINK_RE.sub(lambda match: store(match.group(1)), text)
+    return text, protected_segments
 
 
-def _restore_fenced_code_blocks(text: str, code_blocks: list[str]) -> str:
-    for index, code in enumerate(code_blocks):
-        text = text.replace(f"CHOTACODEBLOCKTOKEN{index}CHOTA", code)
+def _restore_protected_segments(text: str, protected_segments: list[str]) -> str:
+    for index, segment in enumerate(protected_segments):
+        text = text.replace(f"CHOTAPROTECTEDTOKEN{index}CHOTA", segment)
     return text
 
 
@@ -70,9 +89,11 @@ def _format_non_code_text(text: str) -> str:
     text = _BLOCK_BOUNDARY_RE.sub("\n", text)
     text = _BLOCK_TAG_RE.sub("\n", text)
     text = _INLINE_TAG_RE.sub("", text)
-    text = _AUTOLINK_RE.sub(r"\1", text)
+    text = _PAIRED_OPEN_TAG_RE.sub("", text)
+    text = _ATTR_TAG_RE.sub("", text)
+    text = _SELF_CLOSING_TAG_RE.sub("", text)
+    text = _CLOSING_TAG_RE.sub("", text)
     text = _MARKDOWN_LINK_RE.sub(_replace_markdown_link, text)
-    text = _INLINE_CODE_RE.sub(r"\1", text)
     text = _BOLD_RE.sub(r"\2", text)
     text = _ITALIC_RE.sub(lambda match: match.group(1) or match.group(2) or "", text)
     return html.unescape(text)

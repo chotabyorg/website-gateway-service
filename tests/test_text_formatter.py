@@ -37,3 +37,29 @@ def test_html_tags_are_sanitized_but_code_and_text_survive():
 <img src=x onerror=alert(1)>"""
 
     assert format_plain_text_reply(raw) == "<div>x</div>\n\nOne\nTwo\n\nsafe"
+
+
+def test_unknown_html_tags_are_stripped_to_readable_text():
+    raw = "<button onclick=alert(1)>Click</button>\n<unknown>tag</unknown>"
+
+    assert format_plain_text_reply(raw) == "Click\ntag"
+
+
+def test_html_stripping_keeps_literal_angle_brackets_and_code():
+    raw = """2 < 3 and 5 > 4
+Use <name>
+<https://example.com>
+`<tag>`
+```html
+<div>x</div>
+```
+<p>One</p><p>Two</p>"""
+
+    assert format_plain_text_reply(raw) == (
+        "2 < 3 and 5 > 4\n"
+        "Use <name>\n"
+        "https://example.com\n"
+        "<tag>\n"
+        "<div>x</div>\n\n"
+        "One\nTwo"
+    )
