@@ -31,7 +31,7 @@ async def test_send_message_success():
 
 
 @pytest.mark.asyncio
-async def test_send_message_formats_markdown_answer_as_plain_text():
+async def test_send_message_preserves_safe_markdown_answer():
     client = CoreAPIClient(base_url="http://ai-agent-service")
 
     response = MagicMock()
@@ -45,7 +45,7 @@ async def test_send_message_formats_markdown_answer_as_plain_text():
 
     result = await client.send_message("agent-1", "sess-1", "Hi")
 
-    assert result == "Hello\n\nDocs (https://example.com)\nUse <name>"
+    assert result == "**Hello**\n\n[Docs](https://example.com)\nUse <name>"
 
     await client.close()
 
