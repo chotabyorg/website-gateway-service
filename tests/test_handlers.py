@@ -55,6 +55,27 @@ async def test_chat_success():
 
 
 @pytest.mark.asyncio
+async def test_chat_response_shape_is_unchanged_for_formatted_reply():
+    key_manager = MagicMock()
+    key_manager.validate_key.return_value = _make_widget_info()
+
+    core_api = AsyncMock()
+    core_api.send_message.return_value = "Hello\n- item"
+
+    app = _make_app(key_manager=key_manager, core_api=core_api)
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/v1/chat",
+            json={"session_id": "sess-1", "message": "Hi"},
+            headers={"X-Widget-Key": "wk_abc"},
+        )
+
+        assert resp.status == 200
+        assert await resp.json() == {"reply": "Hello\n- item", "session_id": "sess-1"}
+
+
+@pytest.mark.asyncio
 async def test_chat_missing_key():
     app = _make_app()
 

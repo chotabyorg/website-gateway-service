@@ -31,6 +31,26 @@ async def test_send_message_success():
 
 
 @pytest.mark.asyncio
+async def test_send_message_formats_markdown_answer_as_plain_text():
+    client = CoreAPIClient(base_url="http://ai-agent-service")
+
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "answer": "**Hello**\n\n[Docs](https://example.com)\nUse <name>",
+        "session_id": "sess-1",
+    }
+    client.client.post = AsyncMock(return_value=response)
+
+    result = await client.send_message("agent-1", "sess-1", "Hi")
+
+    assert result == "Hello\n\nDocs (https://example.com)\nUse <name>"
+
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_send_message_returns_fallback_on_error():
     client = CoreAPIClient(base_url="http://ai-agent-service")
     client.client.post = AsyncMock(side_effect=httpx.HTTPError("boom"))
