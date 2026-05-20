@@ -3,7 +3,7 @@ import re
 
 
 _FENCED_CODE_RE = re.compile(
-    r"(^|\n)[ \t]*(```|~~~)[^\n]*\n(.*?)(?:\n[ \t]*\2[ \t]*(?=\n|$)|$)",
+    r"(^|\n)[ \t]*(```|~~~)([^\n]*)\n(.*?)(?:\n[ \t]*\2[ \t]*(?=\n|$)|$)",
     re.DOTALL,
 )
 _SCRIPT_STYLE_RE = re.compile(
@@ -39,23 +39,21 @@ _SELF_CLOSING_TAG_RE = re.compile(
     r"<\s*[A-Za-z][A-Za-z0-9:-]*\s*/\s*>",
     re.IGNORECASE,
 )
-_MARKDOWN_LINK_RE = re.compile(r"!?\[([^\]]+)\]\(([^)\s]+(?:\s+\"[^\"]*\")?)\)")
 _AUTOLINK_RE = re.compile(r"<(https?://[^<>\s]+)>", re.IGNORECASE)
 _INLINE_CODE_RE = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
-_BOLD_RE = re.compile(r"(\*\*|__)(.+?)\1", re.DOTALL)
-_ITALIC_RE = re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)|(?<!_)_([^_\n]+)_(?!_)", re.DOTALL)
 _EXCESS_BLANK_LINES_RE = re.compile(r"\n{3,}")
 _TRAILING_SPACES_RE = re.compile(r"[ \t]+\n")
 
 
 def format_plain_text_reply(raw_reply: object) -> str:
-    """Convert raw Markdown/HTML-ish model output into readable widget text."""
+    """Convert raw model output into safe Markdown-ish widget text."""
     text = "" if raw_reply is None else str(raw_reply)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text, protected_segments = _extract_protected_segments(text)
     text = _format_non_code_text(text)
+    text = _normalize_spacing(text)
     text = _restore_protected_segments(text, protected_segments)
-    return _normalize_spacing(text)
+    return text.strip()
 
 
 def _extract_protected_segments(text: str) -> tuple[str, list[str]]:
@@ -68,12 +66,14 @@ def _extract_protected_segments(text: str) -> tuple[str, list[str]]:
 
     def replace_fenced_code(match: re.Match[str]) -> str:
         leading_newline = match.group(1)
-        code = match.group(3).strip("\n")
-        return f"{leading_newline}{store(code)}"
+        fence = match.group(2)
+        info = match.group(3).rstrip()
+        code = match.group(4).strip("\n")
+        return f"{leading_newline}{store(f'{fence}{info}\n{code}\n{fence}')}"
 
     text = _FENCED_CODE_RE.sub(replace_fenced_code, text)
-    text = _INLINE_CODE_RE.sub(lambda match: store(match.group(1)), text)
-    text = _AUTOLINK_RE.sub(lambda match: store(match.group(1)), text)
+    text = _INLINE_CODE_RE.sub(lambda match: store(f"`{match.group(1)}`"), text)
+    text = _AUTOLINK_RE.sub(lambda match: store(match.group(0)), text)
     return text, protected_segments
 
 
@@ -93,18 +93,7 @@ def _format_non_code_text(text: str) -> str:
     text = _ATTR_TAG_RE.sub("", text)
     text = _SELF_CLOSING_TAG_RE.sub("", text)
     text = _CLOSING_TAG_RE.sub("", text)
-    text = _MARKDOWN_LINK_RE.sub(_replace_markdown_link, text)
-    text = _BOLD_RE.sub(r"\2", text)
-    text = _ITALIC_RE.sub(lambda match: match.group(1) or match.group(2) or "", text)
     return html.unescape(text)
-
-
-def _replace_markdown_link(match: re.Match[str]) -> str:
-    label = match.group(1)
-    url = match.group(2).strip()
-    if " " in url:
-        url = url.split(" ", 1)[0]
-    return f"{label} ({url})"
 
 
 def _normalize_spacing(text: str) -> str:

@@ -1,30 +1,36 @@
 from services.text_formatter import format_plain_text_reply
 
 
-def test_markdown_reply_becomes_readable_plain_text():
-    raw = """**Hello**
+def test_markdown_syntax_is_preserved_for_rich_rendering():
+    raw = """## **Hello**
 
 - First item
 - [Docs](https://example.com/docs)
 - Use `agent_id`
+> Book by appointment
+---
 
 ```html
 <div>x</div>
 ```"""
 
     assert format_plain_text_reply(raw) == (
-        "Hello\n\n"
+        "## **Hello**\n\n"
         "- First item\n"
-        "- Docs (https://example.com/docs)\n"
-        "- Use agent_id\n\n"
-        "<div>x</div>"
+        "- [Docs](https://example.com/docs)\n"
+        "- Use `agent_id`\n"
+        "> Book by appointment\n"
+        "---\n\n"
+        "```html\n"
+        "<div>x</div>\n"
+        "```"
     )
 
 
 def test_angle_bracket_text_is_preserved_without_blind_stripping():
     raw = "2 < 3 and 5 > 4\n<https://example.com>\nUse <name>"
 
-    assert format_plain_text_reply(raw) == "2 < 3 and 5 > 4\nhttps://example.com\nUse <name>"
+    assert format_plain_text_reply(raw) == "2 < 3 and 5 > 4\n<https://example.com>\nUse <name>"
 
 
 def test_html_tags_are_sanitized_but_code_and_text_survive():
@@ -36,7 +42,7 @@ def test_html_tags_are_sanitized_but_code_and_text_survive():
 <script>alert(1)</script>
 <img src=x onerror=alert(1)>"""
 
-    assert format_plain_text_reply(raw) == "<div>x</div>\n\nOne\nTwo\n\nsafe"
+    assert format_plain_text_reply(raw) == "```xml\n<div>x</div>\n```\n\nOne\nTwo\n\nsafe"
 
 
 def test_unknown_html_tags_are_stripped_to_readable_text():
@@ -58,8 +64,10 @@ Use <name>
     assert format_plain_text_reply(raw) == (
         "2 < 3 and 5 > 4\n"
         "Use <name>\n"
-        "https://example.com\n"
-        "<tag>\n"
-        "<div>x</div>\n\n"
+        "<https://example.com>\n"
+        "`<tag>`\n"
+        "```html\n"
+        "<div>x</div>\n"
+        "```\n\n"
         "One\nTwo"
     )
