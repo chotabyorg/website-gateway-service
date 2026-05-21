@@ -69,7 +69,8 @@ def _extract_protected_segments(text: str) -> tuple[str, list[str]]:
         fence = match.group(2)
         info = match.group(3).rstrip()
         code = match.group(4).strip("\n")
-        return f"{leading_newline}{store(f'{fence}{info}\n{code}\n{fence}')}"
+        segment = "\n".join((f"{fence}{info}", code, fence))
+        return f"{leading_newline}{store(segment)}"
 
     text = _FENCED_CODE_RE.sub(replace_fenced_code, text)
     text = _INLINE_CODE_RE.sub(lambda match: store(f"`{match.group(1)}`"), text)
