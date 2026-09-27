@@ -1,5 +1,6 @@
 import json
 
+import httpx
 from aiohttp import web
 
 from core.logger import logger
@@ -11,7 +12,10 @@ async def handle_chat(request: web.Request) -> web.Response:
         return web.json_response({"error": "Missing X-Widget-Key header"}, status=401)
 
     key_manager = request.app["key_manager"]
-    widget_info = key_manager.validate_key(api_key)
+    try:
+        widget_info = await key_manager.validate_key_for_chat(api_key)
+    except httpx.HTTPError:
+        return web.json_response({"error": "Widget validation unavailable"}, status=503)
     if widget_info is None:
         return web.json_response({"error": "Invalid widget key"}, status=401)
 
@@ -35,7 +39,12 @@ async def handle_chat(request: web.Request) -> web.Response:
         widget_info.agent_id,
         session_id,
     )
-    reply = await core_api.send_message(widget_info.agent_id, session_id, message)
+    reply = await core_api.send_message(
+        widget_info.agent_id,
+        session_id,
+        message,
+        owner_id=widget_info.owner_id,
+    )
 
     return web.json_response({"reply": reply, "session_id": session_id})
 

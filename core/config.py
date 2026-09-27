@@ -1,3 +1,4 @@
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings
 
 
@@ -7,6 +8,7 @@ class Settings(BaseSettings):
     INTEGRATIONS_POLL_INTERVAL: int = 60
 
     AI_AGENT_SERVICE_URL: str = "http://localhost:55570"
+    CHAT_S2S_TOKEN: SecretStr = SecretStr("")
     AI_AGENT_REQUEST_TIMEOUT_SECONDS: float = 120.0
 
     HOST: str = "0.0.0.0"

@@ -57,5 +57,18 @@ class WidgetKeyManager:
     def validate_key(self, api_key: str) -> WidgetInfo | None:
         return self._widgets.get(api_key)
 
+    async def validate_key_for_chat(self, api_key: str) -> WidgetInfo | None:
+        """Use control-plane's authenticated validation response for chat ownership."""
+        validated = await self._cp_client.validate_widget_key(api_key)
+        if validated is None:
+            return None
+        return WidgetInfo(
+            integration_id=validated.integration_id,
+            agent_id=validated.agent_id,
+            owner_id=validated.owner_id,
+            widget_api_key=api_key,
+            config=validated.config,
+        )
+
     def active_count(self) -> int:
         return len(self._widgets)

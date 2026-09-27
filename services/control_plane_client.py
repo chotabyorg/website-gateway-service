@@ -15,6 +15,14 @@ class IntegrationConfig:
     credentials: dict
 
 
+@dataclass
+class WidgetValidation:
+    integration_id: str
+    agent_id: str
+    owner_id: str
+    config: dict
+
+
 class ControlPlaneClient:
     def __init__(self, base_url: str, internal_token: str) -> None:
         self.client = httpx.AsyncClient(
@@ -46,6 +54,28 @@ class ControlPlaneClient:
                 )
             )
         return configs
+
+    async def validate_widget_key(self, api_key: str) -> WidgetValidation | None:
+        """Validate a widget key against control-plane and return trusted ownership."""
+        try:
+            response = await self.client.get(
+                "/v1/widget/internal/validate",
+                params={"api_key": api_key},
+            )
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.error("Widget key validation request to control-plane failed: %s", exc)
+            raise
+
+        item = response.json()
+        return WidgetValidation(
+            integration_id=item["integration_id"],
+            agent_id=item["agent_id"],
+            owner_id=item["owner_id"],
+            config=item.get("config", {}),
+        )
 
     async def close(self) -> None:
         await self.client.aclose()

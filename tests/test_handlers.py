@@ -29,10 +29,16 @@ def _make_widget_info() -> WidgetInfo:
     )
 
 
+def _make_key_manager(value=None):
+    key_manager = MagicMock()
+    key_manager.validate_key.return_value = value
+    key_manager.validate_key_for_chat = AsyncMock(return_value=value)
+    return key_manager
+
+
 @pytest.mark.asyncio
 async def test_chat_success():
-    key_manager = MagicMock()
-    key_manager.validate_key.return_value = _make_widget_info()
+    key_manager = _make_key_manager(_make_widget_info())
     key_manager.active_count.return_value = 1
 
     core_api = AsyncMock()
@@ -51,13 +57,15 @@ async def test_chat_success():
         assert data["reply"] == "Hello!"
         assert data["session_id"] == "sess-1"
 
-    core_api.send_message.assert_awaited_once_with("agent-1", "sess-1", "Hi")
+    key_manager.validate_key_for_chat.assert_awaited_once_with("wk_abc")
+    core_api.send_message.assert_awaited_once_with(
+        "agent-1", "sess-1", "Hi", owner_id="owner-1"
+    )
 
 
 @pytest.mark.asyncio
 async def test_chat_response_shape_is_unchanged_for_formatted_reply():
-    key_manager = MagicMock()
-    key_manager.validate_key.return_value = _make_widget_info()
+    key_manager = _make_key_manager(_make_widget_info())
 
     core_api = AsyncMock()
     core_api.send_message.return_value = "Hello\n- item"
@@ -89,8 +97,7 @@ async def test_chat_missing_key():
 
 @pytest.mark.asyncio
 async def test_chat_invalid_key():
-    key_manager = MagicMock()
-    key_manager.validate_key.return_value = None
+    key_manager = _make_key_manager(None)
 
     app = _make_app(key_manager=key_manager)
 
@@ -105,8 +112,7 @@ async def test_chat_invalid_key():
 
 @pytest.mark.asyncio
 async def test_chat_missing_message():
-    key_manager = MagicMock()
-    key_manager.validate_key.return_value = _make_widget_info()
+    key_manager = _make_key_manager(_make_widget_info())
 
     app = _make_app(key_manager=key_manager)
 
@@ -121,8 +127,7 @@ async def test_chat_missing_message():
 
 @pytest.mark.asyncio
 async def test_chat_missing_session_id():
-    key_manager = MagicMock()
-    key_manager.validate_key.return_value = _make_widget_info()
+    key_manager = _make_key_manager(_make_widget_info())
 
     app = _make_app(key_manager=key_manager)
 
