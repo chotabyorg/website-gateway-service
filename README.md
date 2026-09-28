@@ -121,6 +121,7 @@ Content-Type: application/json
 |------------|-------------|--------------|----------|
 | `CONTROL_PLANE_URL` | нет | `http://control-plane-service` | URL control-plane-service |
 | `INTERNAL_API_TOKEN` | нет | `""` | S2S-токен, отправляется в control-plane в заголовке `X-Internal-Token` |
+| `CHAT_S2S_TOKEN` | нет | `""` | Отдельный токен для вызовов `ai-agent-service`; не переиспользуйте `INTERNAL_API_TOKEN` |
 | `INTEGRATIONS_POLL_INTERVAL` | нет | `60` | Интервал reconcile с control-plane (секунды) |
 | `AI_AGENT_SERVICE_URL` | нет | `http://ai-agent-service` | URL ai-agent-service |
 | `AI_AGENT_REQUEST_TIMEOUT_SECONDS` | нет | `120` | Read timeout ожидания ответа от ai-agent-service при обработке widget chat request |
@@ -136,7 +137,7 @@ Content-Type: application/json
 - **Входящие запросы от виджета** — заголовок `X-Widget-Key` на `/v1/chat`. Значение ключа валидируется против in-memory кэша `WidgetKeyManager`, который синхронизируется из `control-plane-service`.
 - **Исходящие запросы в control-plane** — заголовок `X-Internal-Token: $INTERNAL_API_TOKEN` (см. `services/control_plane_client.py`). Это общий S2S-токен платформы — он должен быть одинаковым во всех внутренних сервисах Chota (user-service, control-plane-service, messenger gateways, website-gateway-service).
 
-Исходящие запросы в `ai-agent-service` (`POST /v1/chat/completions`) на данный момент идут без заголовка авторизации (см. «Известные ограничения» в корневом `CLAUDE.md`).
+Для каждого сообщения ключ виджета проверяется через защищённый `control-plane-service` endpoint `/v1/widget/internal/validate`. Ответ содержит доверенные `agent_id` и `owner_id`; исходящий запрос к `/v1/chat/completions` отправляет владельца в `X-User-Id` и отдельный `CHAT_S2S_TOKEN` в `X-Service-Token`.
 
 ## Интеграции
 

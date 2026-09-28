@@ -45,3 +45,28 @@ async def test_fetch_integrations_error():
         await client.fetch_integrations()
 
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_widget_key_validation_returns_authenticated_owner():
+    client = ControlPlaneClient(base_url="http://control-plane", internal_token="token")
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "integration_id": "int-1",
+        "agent_id": "agent-1",
+        "owner_id": "owner-1",
+        "config": {"primary_color": "#123456"},
+    }
+    client.client.get = AsyncMock(return_value=response)
+
+    validated = await client.validate_widget_key("wk_abc")
+
+    assert validated is not None
+    assert validated.owner_id == "owner-1"
+    client.client.get.assert_awaited_once_with(
+        "/v1/widget/internal/validate",
+        params={"api_key": "wk_abc"},
+    )
+    await client.close()

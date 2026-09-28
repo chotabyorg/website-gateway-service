@@ -95,3 +95,27 @@ async def test_reconcile_preserves_cache_on_error():
 
     # Cache preserved
     assert manager.validate_key("wk_abc") is not None
+
+
+@pytest.mark.asyncio
+async def test_chat_validation_uses_control_plane_owner_response():
+    cp = AsyncMock()
+    cp.validate_widget_key.return_value = type(
+        "ValidatedWidget",
+        (),
+        {
+            "integration_id": "int-current",
+            "agent_id": "agent-current",
+            "owner_id": "owner-current",
+            "config": {"primary_color": "#123456"},
+        },
+    )()
+    manager = WidgetKeyManager(cp)
+
+    info = await manager.validate_key_for_chat("wk_abc")
+
+    assert info is not None
+    assert info.integration_id == "int-current"
+    assert info.agent_id == "agent-current"
+    assert info.owner_id == "owner-current"
+    cp.validate_widget_key.assert_awaited_once_with("wk_abc")

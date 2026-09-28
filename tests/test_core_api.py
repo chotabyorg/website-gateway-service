@@ -14,7 +14,7 @@ async def test_send_message_success():
     response.json.return_value = {"answer": "Hello there!", "session_id": "sess-1"}
     client.client.post = AsyncMock(return_value=response)
 
-    result = await client.send_message("agent-1", "sess-1", "Hi")
+    result = await client.send_message("agent-1", "sess-1", "Hi", owner_id="owner-1")
 
     assert result == "Hello there!"
     client.client.post.assert_awaited_once_with(
@@ -25,8 +25,33 @@ async def test_send_message_success():
             "channel": "website_widget",
             "message": "Hi",
         },
+        headers={"X-User-Id": "owner-1"},
     )
 
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_send_message_sends_dedicated_s2s_token(load_module):
+    core_api = load_module("services.core_api")
+    client = core_api.CoreAPIClient(base_url="http://ai-agent-service")
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"answer": "Hi", "session_id": "sess-1"}
+    client.client.post = AsyncMock(return_value=response)
+
+    await client.send_message("agent-1", "sess-1", "Hi", owner_id="owner-1")
+
+    client.client.post.assert_awaited_once_with(
+        "/v1/chat/completions",
+        json={
+            "agent_id": "agent-1",
+            "external_client_id": "sess-1",
+            "channel": "website_widget",
+            "message": "Hi",
+        },
+        headers={"X-Service-Token": "test-chat-token", "X-User-Id": "owner-1"},
+    )
     await client.close()
 
 

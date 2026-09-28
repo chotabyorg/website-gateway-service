@@ -23,16 +23,27 @@ class CoreAPIClient:
             ),
         )
 
-    async def send_message(self, agent_id: str, session_id: str, message: str) -> str:
+    async def send_message(
+        self,
+        agent_id: str,
+        session_id: str,
+        message: str,
+        *,
+        owner_id: str | None = None,
+    ) -> str:
         payload = {
             "agent_id": agent_id,
             "external_client_id": session_id,
             "channel": "website_widget",
             "message": message,
         }
+        token = settings.CHAT_S2S_TOKEN.get_secret_value()
+        headers = {"X-Service-Token": token} if token else {}
+        if owner_id:
+            headers["X-User-Id"] = owner_id
         started_at = perf_counter()
         try:
-            response = await self.client.post("/v1/chat/completions", json=payload)
+            response = await self.client.post("/v1/chat/completions", json=payload, headers=headers)
             response.raise_for_status()
             data = response.json()
             elapsed = perf_counter() - started_at
