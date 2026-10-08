@@ -1,9 +1,10 @@
+import logging
 from time import perf_counter
 
 import httpx
 
 from core.config import settings
-from core.logger import logger
+from core.logger import log_event
 from services.text_formatter import format_plain_text_reply
 
 
@@ -47,35 +48,18 @@ class CoreAPIClient:
             response.raise_for_status()
             data = response.json()
             elapsed = perf_counter() - started_at
-            logger.info(
-                "AI response received: elapsed=%.3fs agent_id=%s session_id=%s status=%s",
-                elapsed,
-                agent_id,
-                session_id,
-                response.status_code,
-            )
+            log_event(logging.INFO, "legacy_ai_response", elapsed=elapsed,
+                      agent_id=agent_id, session_id=session_id, status=response.status_code)
             return format_plain_text_reply(data.get("answer", ""))
         except httpx.TimeoutException as exc:
             elapsed = perf_counter() - started_at
-            logger.error(
-                "Core API timeout: elapsed=%.3fs timeout_seconds=%.3f agent_id=%s session_id=%s error=%s",
-                elapsed,
-                settings.AI_AGENT_REQUEST_TIMEOUT_SECONDS,
-                agent_id,
-                session_id,
-                exc,
-            )
+            log_event(logging.ERROR, "legacy_ai_timeout", elapsed=elapsed,
+                      agent_id=agent_id, session_id=session_id, exc=exc)
             return TIMEOUT_FALLBACK_REPLY
         except httpx.HTTPError as exc:
             elapsed = perf_counter() - started_at
-            logger.error(
-                "Core API error: elapsed=%.3fs agent_id=%s session_id=%s error_type=%s error=%s",
-                elapsed,
-                agent_id,
-                session_id,
-                type(exc).__name__,
-                exc,
-            )
+            log_event(logging.ERROR, "legacy_ai_unavailable", elapsed=elapsed,
+                      agent_id=agent_id, session_id=session_id, exc=exc)
             return GENERIC_FALLBACK_REPLY
 
     async def close(self) -> None:

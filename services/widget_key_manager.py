@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 
-from core.logger import logger
+from core.logger import log_event
 from services.control_plane_client import ControlPlaneClient
 
 
@@ -25,34 +26,25 @@ class WidgetKeyManager:
     async def reconcile(self) -> None:
         try:
             integrations = await self._cp_client.fetch_integrations()
-        except Exception as exc:
-            logger.error("Reconcile failed, preserving existing cache: %s", exc)
-            return
-
-        async with self._lock:
-            new_keys: set[str] = set()
+            snapshot: dict[str, WidgetInfo] = {}
             for integration in integrations:
                 api_key = integration.credentials.get("widget_api_key", "")
                 if not api_key:
                     continue
-                new_keys.add(api_key)
-                self._widgets[api_key] = WidgetInfo(
+                snapshot[api_key] = WidgetInfo(
                     integration_id=integration.integration_id,
                     agent_id=integration.agent_id,
                     owner_id=integration.owner_id,
                     widget_api_key=api_key,
                     config=integration.credentials.get("widget_config", {}),
                 )
-
-            removed = set(self._widgets.keys()) - new_keys
-            for key in removed:
-                del self._widgets[key]
-
-        logger.info(
-            "Reconcile complete: %d active widgets, %d removed",
-            len(new_keys),
-            len(removed),
-        )
+            async with self._lock:
+                self._widgets = snapshot
+        except Exception as exc:
+            # Includes malformed decrypted config, without exception input/trace.
+            log_event(logging.ERROR, "widget_reconcile_unavailable", exc=exc)
+            return
+        log_event(logging.INFO, "widget_reconcile_complete")
 
     def validate_key(self, api_key: str) -> WidgetInfo | None:
         return self._widgets.get(api_key)

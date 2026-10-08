@@ -9,6 +9,8 @@ jobs:
     with:
       service: website-gateway-service
       gitops_repo: chotabyorg/gitops
+      # Stage the published image for exact-candidate review before prod promotion.
+      gitops_branch: releases/website-gateway-service
     permissions:
       contents: read
       packages: write

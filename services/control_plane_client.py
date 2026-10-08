@@ -4,7 +4,9 @@ from dataclasses import dataclass
 
 import httpx
 
-from core.logger import logger
+import logging
+
+from core.logger import log_event
 
 
 @dataclass
@@ -39,7 +41,7 @@ class ControlPlaneClient:
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            logger.error("Failed to fetch WEBSITE_WIDGET integrations from control-plane: %s", exc)
+            log_event(logging.ERROR, "control_plane_integrations_unavailable", exc=exc)
             raise
 
         items = response.json()
@@ -62,11 +64,12 @@ class ControlPlaneClient:
                 "/v1/widget/internal/validate",
                 params={"api_key": api_key},
             )
+            log_event(logging.INFO, "widget_validation_response", status=response.status_code)
             if response.status_code == 404:
                 return None
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            logger.error("Widget key validation request to control-plane failed: %s", exc)
+            log_event(logging.ERROR, "widget_validation_unavailable", exc=exc)
             raise
 
         item = response.json()
