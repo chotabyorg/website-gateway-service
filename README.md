@@ -253,3 +253,75 @@ website-gateway-service/
 - **Виджет получает `401 Invalid widget key`.** Кэш синхронизирован с задержкой до `INTEGRATIONS_POLL_INTERVAL` секунд. Если интеграция только что создана/обновлена — подождите следующего reconcile или рестартните сервис.
 - **Виджет получает HTTP 200 с русским текстом «Извините, сервис временно недоступен. Попробуйте позже.»** При ошибке `ai-agent-service` сервис возвращает HTTP 200 со строкой-заглушкой вместо ошибки (см. `docs/FOUND_BUGS.md` B-003). Внешне запрос выглядит успешным — ищите причину в логах `core_api.py` (`Core API error: ...`) и в самом ai-agent-service.
 - **`ALLOWED_ORIGINS` не применяется.** На данный момент middleware эхо-возвращает `Origin` запроса как есть, значение переменной не используется (см. B-001). Переменная зарезервирована под будущий whitelist.
+
+## Goal4A managed Website routing
+
+The default configuration remains entirely legacy. Routing uses the authenticated
+Control Plane `integration_id`; widget keys, public owner/agent fields and message
+text never select a cohort. `MANAGED_WEBSITE_GUARDED_INTEGRATIONS` is a JSON mapping
+of canonical integration UUID to expected agent UUID (maximum 64). Once a managed
+message can be admitted, retain its guard and Conversation configuration through
+rollback. Removing a guard, reverting to a gateway image without this protocol or
+downgrading the Conversation database is not a supported rollback.
+
+`MANAGED_WEBSITE_COHORTS` maps integration UUID to
+`{"expected_agent_id":"<UUID>","mode":"SESSION_ALLOWLIST","session_ids":["<UUID>"]}`.
+Maximum 64 integrations and 64 distinct sessions per integration. Cohorts must have
+a matching retained guard. Unknown fields/modes, duplicate JSON keys, wildcard
+identities and malformed/noncanonical UUIDs fail startup. Source also supports
+`INTEGRATION_ALL` for one exact configured integration with `session_ids: []`;
+Goal4A production/release gates prohibit deploying that mode. Production activation
+is restricted to one explicitly reviewed technical session. Full demo activation
+requires stable frontend IDs and a separate reviewed assistant-history/context-limit
+policy; managed history in Goal4A contains inbound messages only.
+
+For a selected managed request the body is:
+
+```json
+{"session_id":"<canonical UUID>","message_id":"<canonical UUID>","message":"exact customer text"}
+```
+
+The client generates `message_id` once per message and retains the whole envelope
+on retry. The same text with a new ID is a new message; changed text/session under
+the same ID conflicts (`409`). Legacy sessions without `message_id` keep the old
+contract. Identified requests on guarded integrations always obtain an atomic
+Conversation disposition, including when the cohort has been disabled. A retained
+MANAGED disposition wins rollback; a retained LEGACY disposition wins activation
+races. Only a positively committed LEGACY disposition permits legacy AI. Conversation
+errors, admission ambiguity, pending/failed/unknown execution return bounded `503`
+errors and never fall through to legacy.
+
+Required when any guard exists: `CONVERSATION_SERVICE_URL` and dedicated
+`CONVERSATION_S2S_TOKEN` (never reuse widget/internal/chat credentials). Private paths
+are `/internal/v1/website/admissions`, `/results`, `/responses/begin`, and
+`/responses/complete`. Owner/integration/agent come only from Control Plane. The
+server namespace is `main-chota.website-widget.v1`, channel `WEBSITE_WIDGET`.
+The worker processes each admitted message immediately in durable session order,
+one logical turn per message; HTTP disconnect does not cancel worker execution.
+
+`CONVERSATION_REQUEST_TIMEOUT_SECONDS` is 0.1–30 (default 10),
+`CONVERSATION_RESULT_WAIT_SECONDS` is 0–120 (default 120), and
+`CONVERSATION_RESULT_POLL_SECONDS` is 0.05–5 (default 0.25). A retained draft keeps
+`{"reply":"...","session_id":"..."}`. Before writing, the gateway commits a
+response intent and sets CORS and `Cache-Control: no-store`. Every physical response
+has a fresh response-attempt UUID. `WRITE_COMPLETED` means local socket completion,
+not browser acknowledgement; failed/cancelled/uncertain writes remain honest
+transport facts. Retry resends the retained draft with fresh evidence and no AI call.
+Reconciliation is bounded and joined even on request cancellation.
+
+## Credential-safe diagnostics
+
+Startup installs record and output-sink protections before clients start. HTTPX,
+httpcore and aiohttp dependency/access/error records are suppressed at every level,
+including descendants; the actual AppRunner uses `access_log=None`. Supported
+`setup_logging()` reconfiguration retains protection at INFO/DEBUG. Bounded application
+events contain only fixed event codes, status, duration, safe exception type and
+validated canonical UUID diagnostics. Arbitrary legacy session values keep their
+existing parser semantics but appear only as `opaque` in logs. Raw exception values,
+tracebacks/chains, response bodies, query URLs, headers and config objects are never
+application diagnostics. Unexpected request errors return a fixed safe error.
+
+A deployed logging proof for Website, Control Plane and any credential-observing
+proxy is required before using a real widget credential. The tests use only fake
+sentinels and exercise success/404/status/transport/config failures, real AppRunner
+requests, opaque sessions, dependency descendants and logging reconfiguration.
