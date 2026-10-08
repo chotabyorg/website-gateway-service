@@ -325,3 +325,27 @@ A deployed logging proof for Website, Control Plane and any credential-observing
 proxy is required before using a real widget credential. The tests use only fake
 sentinels and exercise success/404/status/transport/config failures, real AppRunner
 requests, opaque sessions, dependency descendants and logging reconfiguration.
+
+## Source publication and production promotion
+
+A push to source `main` calls the shared build/publish workflow and updates only
+GitOps `releases/website-gateway-service`. Before merging Website source, create
+that release branch from current valid GitOps `main` if absent; if it already
+exists, inspect and advance it without discarding other work. It must contain
+`services/website-gateway-service/prod/kustomization.yaml`. The shared workflow
+updates `newTag` and also replaces an existing image `digest`, so pinning a digest
+alone cannot contain an automatic publication to GitOps `main`.
+
+After CI completes, record the full source SHA, actual published GHCR digest and
+OCI provenance, verify the Main-node platform, and test that immutable artifact.
+Source review and local Docker tests establish source behavior; they do not approve
+the later CI image or establish production deployment.
+
+Promote only the reviewed Website image reference and required reviewed config,
+patches and sealed-secret changes through a separate exact-candidate GitOps PR to
+`main`, after the Goal4A independent release review returns CLEAN. Do not merge the
+whole release branch blindly. ArgoCD reconciles GitOps `main`; publication on the
+isolated release branch does not change production desired state. Record GitOps
+revision, ArgoCD revision and actual ready runtime images separately. The concrete
+cross-service staging, credential-proof, canary and rollback gates remain in
+GitOps `services/conversation-service/RELEASE.md`.
