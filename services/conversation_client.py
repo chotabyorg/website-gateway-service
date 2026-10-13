@@ -5,12 +5,18 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from time import monotonic
+from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 
 from core.logger import log_event
 
 _BASE = "/internal/v1/website"
+
+
+def response_attempt_for(message_id: str) -> str:
+    """Return one stable transport identity for retries of the same canonical input."""
+    return str(uuid5(NAMESPACE_URL, f"main-chota.website-widget-response.v1:{message_id}"))
 
 
 class ConversationUnavailable(Exception):
@@ -40,6 +46,7 @@ class WebsiteResponseIntent:
     draft_text: str
     send: bool
     replayed: bool
+    denial_reason: str | None = None
 
 
 class ConversationClient:
@@ -95,13 +102,18 @@ class ConversationClient:
         if (data.get("response_attempt_id") != response_attempt_id
                 or not isinstance(data.get("draft_text"), str)
                 or type(data.get("send")) is not bool
-                or type(data.get("replayed")) is not bool):
+                or type(data.get("replayed")) is not bool
+                or data.get("denial_reason") not in {
+                    None, "SUPERSEDED", "DELIVERY_NOT_RETRYABLE"}
+                or (data["send"] and data.get("denial_reason") is not None)
+                or (not data["send"] and data.get("denial_reason") is None)):
             raise ConversationUnavailable("invalid_response_intent")
         return WebsiteResponseIntent(
             response_attempt_id=response_attempt_id,
             draft_text=data["draft_text"],
             send=data["send"],
             replayed=data["replayed"],
+            denial_reason=data["denial_reason"],
         )
 
     async def complete_response(self, envelope: WebsiteEnvelope, response_attempt_id: str, outcome: str) -> None:

@@ -9,11 +9,18 @@ from services.conversation_client import (
     ConversationUnavailable,
     WebsiteEnvelope,
     WebsiteResponseIntent,
+    response_attempt_for,
 )
 
 ENVELOPE = WebsiteEnvelope("11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222",
                            "33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444",
                            "55555555-5555-4555-8555-555555555555", "  exact\ntext  ")
+
+
+def test_website_response_attempt_is_stable_per_canonical_message():
+    first = response_attempt_for(ENVELOPE.message_id)
+    assert first == response_attempt_for(ENVELOPE.message_id)
+    assert first != response_attempt_for("66666666-6666-4666-8666-666666666666")
 
 
 @pytest.mark.asyncio
@@ -55,13 +62,16 @@ async def test_begin_response_preserves_and_validates_send_permission():
     client._post = AsyncMock(return_value={
         "response_attempt_id": "attempt", "draft_text": "retained",
         "send": False, "replayed": True,
+        "denial_reason": "DELIVERY_NOT_RETRYABLE",
     })
     result = await client.begin_response(ENVELOPE, "attempt")
-    assert result == WebsiteResponseIntent("attempt", "retained", False, True)
+    assert result == WebsiteResponseIntent(
+        "attempt", "retained", False, True, "DELIVERY_NOT_RETRYABLE")
 
     client._post = AsyncMock(return_value={
         "response_attempt_id": "attempt", "draft_text": "stale",
         "send": "false", "replayed": False,
+        "denial_reason": "SUPERSEDED",
     })
     with pytest.raises(ConversationUnavailable):
         await client.begin_response(ENVELOPE, "attempt")

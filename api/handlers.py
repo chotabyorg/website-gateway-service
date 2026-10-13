@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-from uuid import uuid4
 
 import httpx
 from aiohttp import web
@@ -9,7 +8,12 @@ from aiohttp import web
 from core.logger import log_event
 from core.routing import RoutingPolicy, strict_uuid
 from api.middleware import apply_response_headers
-from services.conversation_client import ConversationConflict, ConversationUnavailable, WebsiteEnvelope
+from services.conversation_client import (
+    ConversationConflict,
+    ConversationUnavailable,
+    WebsiteEnvelope,
+    response_attempt_for,
+)
 from services.text_formatter import format_plain_text_reply
 
 
@@ -110,13 +114,17 @@ async def _managed_reply(request: web.Request, conversation, envelope: WebsiteEn
             error = "Managed result unavailable; retry the same message_id"
         return web.json_response({"error": error}, status=503)
 
-    attempt = str(uuid4())  # Transport identity, never canonical message identity.
+    # A retry of the same canonical request keeps the same transport identity,
+    # including when this Gateway process restarted after a socket write.
+    attempt = response_attempt_for(envelope.message_id)
     intent = await conversation.begin_response(envelope, attempt)
     if not intent.send:
-        # A retained draft is content, not permission. Keep the established
-        # widget's generic retry behavior while withholding all assistant text.
+        # A retained draft is content, not permission. Superseded output is a
+        # conflict; unresolved delivery evidence asks the client to retry later.
+        superseded = intent.denial_reason == "SUPERSEDED"
         response = web.json_response(
-            {"error": "response_superseded", "session_id": envelope.session_id}, status=409
+            {"error": ("response_superseded" if superseded else "response_unavailable"),
+             "session_id": envelope.session_id}, status=409 if superseded else 503
         )
         response.headers["Cache-Control"] = "no-store"
         apply_response_headers(request, response)
