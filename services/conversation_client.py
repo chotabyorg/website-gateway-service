@@ -34,6 +34,14 @@ class WebsiteEnvelope:
         return {key: getattr(self, key) for key in ("owner_id", "integration_id", "agent_id", "session_id", "message_id")}
 
 
+@dataclass(frozen=True)
+class WebsiteResponseIntent:
+    response_attempt_id: str
+    draft_text: str
+    send: bool
+    replayed: bool
+
+
 class ConversationClient:
     def __init__(self, base_url: str, token: str, *, request_timeout: float = 10,
                  result_wait: float = 120, poll_interval: float = 0.25) -> None:
@@ -80,11 +88,21 @@ class ConversationClient:
                 return data
             await asyncio.sleep(min(self.poll_interval, max(0, deadline - monotonic())))
 
-    async def begin_response(self, envelope: WebsiteEnvelope, response_attempt_id: str) -> str:
+    async def begin_response(
+        self, envelope: WebsiteEnvelope, response_attempt_id: str
+    ) -> WebsiteResponseIntent:
         data = await self._post("/responses/begin", {**envelope.lookup(), "response_attempt_id": response_attempt_id})
-        if data.get("response_attempt_id") != response_attempt_id or not isinstance(data.get("draft_text"), str):
+        if (data.get("response_attempt_id") != response_attempt_id
+                or not isinstance(data.get("draft_text"), str)
+                or type(data.get("send")) is not bool
+                or type(data.get("replayed")) is not bool):
             raise ConversationUnavailable("invalid_response_intent")
-        return data["draft_text"]
+        return WebsiteResponseIntent(
+            response_attempt_id=response_attempt_id,
+            draft_text=data["draft_text"],
+            send=data["send"],
+            replayed=data["replayed"],
+        )
 
     async def complete_response(self, envelope: WebsiteEnvelope, response_attempt_id: str, outcome: str) -> None:
         data = await self._post("/responses/complete", {**envelope.lookup(), "response_attempt_id": response_attempt_id,

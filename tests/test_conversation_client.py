@@ -3,7 +3,13 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from services.conversation_client import ConversationClient, ConversationConflict, ConversationUnavailable, WebsiteEnvelope
+from services.conversation_client import (
+    ConversationClient,
+    ConversationConflict,
+    ConversationUnavailable,
+    WebsiteEnvelope,
+    WebsiteResponseIntent,
+)
 
 ENVELOPE = WebsiteEnvelope("11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222",
                            "33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444",
@@ -40,6 +46,25 @@ async def test_poll_timeout_pending_does_not_dispatch():
     client = ConversationClient("http://unused", "token", result_wait=0)
     client._post = AsyncMock(return_value={"state": "PENDING"})
     assert await client.wait_result(ENVELOPE) == {"state": "PENDING"}
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_begin_response_preserves_and_validates_send_permission():
+    client = ConversationClient("http://unused", "token")
+    client._post = AsyncMock(return_value={
+        "response_attempt_id": "attempt", "draft_text": "retained",
+        "send": False, "replayed": True,
+    })
+    result = await client.begin_response(ENVELOPE, "attempt")
+    assert result == WebsiteResponseIntent("attempt", "retained", False, True)
+
+    client._post = AsyncMock(return_value={
+        "response_attempt_id": "attempt", "draft_text": "stale",
+        "send": "false", "replayed": False,
+    })
+    with pytest.raises(ConversationUnavailable):
+        await client.begin_response(ENVELOPE, "attempt")
     await client.close()
 
 

@@ -9,7 +9,11 @@ import pytest
 from api.handlers import handle_chat
 from api.middleware import cors_middleware, safe_error_middleware
 from core.routing import RoutingPolicy
-from services.conversation_client import ConversationUnavailable, ConversationConflict
+from services.conversation_client import (
+    ConversationConflict,
+    ConversationUnavailable,
+    WebsiteResponseIntent,
+)
 from services.widget_key_manager import WidgetInfo
 
 INTEGRATION = "8d4a1b73-7973-4dcc-a3d4-1312d871c1d4"
@@ -30,7 +34,9 @@ def make_app(*, selected=True, mode="SESSION_ALLOWLIST", agent=AGENT, integratio
     conversation = AsyncMock()
     conversation.admit.return_value = "MANAGED"
     conversation.wait_result.return_value = {"state": "DRAFT_READY", "draft_text": "retained"}
-    conversation.begin_response.return_value = "retained"
+    conversation.begin_response.return_value = WebsiteResponseIntent(
+        response_attempt_id="attempt", draft_text="retained", send=True, replayed=False,
+    )
     app = web.Application(middlewares=[safe_error_middleware, cors_middleware])
     app.update(key_manager=key, core_api=legacy, conversation_client=conversation, routing_policy=policy)
     app.router.add_post('/v1/chat', handle_chat)
@@ -59,6 +65,25 @@ async def test_managed_success_intent_before_write_cors_and_evidence():
     assert envelope.text == '  identical\ntext  '
     attempt = cs.begin_response.call_args.args[1]
     cs.complete_response.assert_awaited_once_with(envelope, attempt, 'WRITE_COMPLETED')
+
+
+@pytest.mark.asyncio
+async def test_send_false_never_exposes_stale_draft_or_records_completion():
+    app, legacy, cs = make_app()
+    cs.begin_response.return_value = WebsiteResponseIntent(
+        response_attempt_id="attempt", draft_text="stale secret reply",
+        send=False, replayed=False,
+    )
+    async with TestClient(TestServer(app)) as client:
+        response = await post(client)
+        assert response.status == 409
+        payload = await response.json()
+        assert payload == {"error": "response_superseded", "session_id": SESSION}
+        assert "stale secret reply" not in response.text
+        assert "reply" not in payload
+        assert response.headers["Cache-Control"] == "no-store"
+    cs.complete_response.assert_not_awaited()
+    legacy.send_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -111,8 +111,17 @@ async def _managed_reply(request: web.Request, conversation, envelope: WebsiteEn
         return web.json_response({"error": error}, status=503)
 
     attempt = str(uuid4())  # Transport identity, never canonical message identity.
-    draft = await conversation.begin_response(envelope, attempt)
-    response = web.json_response({"reply": format_plain_text_reply(draft), "session_id": envelope.session_id})
+    intent = await conversation.begin_response(envelope, attempt)
+    if not intent.send:
+        # A retained draft is content, not permission. Keep the established
+        # widget's generic retry behavior while withholding all assistant text.
+        response = web.json_response(
+            {"error": "response_superseded", "session_id": envelope.session_id}, status=409
+        )
+        response.headers["Cache-Control"] = "no-store"
+        apply_response_headers(request, response)
+        return response
+    response = web.json_response({"reply": format_plain_text_reply(intent.draft_text), "session_id": envelope.session_id})
     response.headers["Cache-Control"] = "no-store"
     apply_response_headers(request, response)
     outcome = "UNKNOWN"

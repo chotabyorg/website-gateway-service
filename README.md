@@ -306,8 +306,12 @@ one logical turn per message; HTTP disconnect does not cancel worker execution.
 response intent and sets CORS and `Cache-Control: no-store`. Every physical response
 has a fresh response-attempt UUID. `WRITE_COMPLETED` means local socket completion,
 not browser acknowledgement; failed/cancelled/uncertain writes remain honest
-transport facts. Retry resends the retained draft with fresh evidence and no AI call.
-Reconciliation is bounded and joined even on request cancellation.
+transport facts. A Conversation response with `send=false` is an authorization
+denial: the gateway returns HTTP 409 with no `reply` and records no transport
+completion. The widget already renders non-2xx responses with its generic retry
+message. A retained draft alone never permits a write. Completion is bound to the
+response attempt that received `send=true`; superseded and no-send attempts cannot
+append an AGENT Message. Reconciliation is bounded and joined even on cancellation.
 
 ## Credential-safe diagnostics
 
