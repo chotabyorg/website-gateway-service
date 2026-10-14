@@ -303,19 +303,20 @@ one logical turn per message; HTTP disconnect does not cancel worker execution.
 `CONVERSATION_RESULT_WAIT_SECONDS` is 0–120 (default 120), and
 `CONVERSATION_RESULT_POLL_SECONDS` is 0.05–5 (default 0.25). A retained draft keeps
 `{"reply":"...","session_id":"..."}`. Before writing, the gateway commits a
-response intent and sets CORS and `Cache-Control: no-store`. Retries of the same
-canonical `message_id` use one stable response-attempt UUID. `WRITE_COMPLETED` means
-local socket completion, not browser acknowledgement; failed/cancelled/uncertain
-writes remain honest transport facts. A Conversation response with `send=false` is
-an authorization denial: a superseded Turn returns HTTP 409, while unresolved or
-previously failed transport evidence returns HTTP 503. Both responses omit `reply`
-and record no transport completion. The widget already renders non-2xx responses
-with its generic retry message. A retained draft alone never permits a write. Conversation
-permits replay of a known completed write only while its original Turn remains
-current; unknown, failed, and superseded attempts never gain send permission on
-replay. Completion is bound to the response attempt that received `send=true`;
-superseded and no-send attempts cannot append an AGENT Message. Reconciliation is
-bounded and joined even on cancellation.
+response intent and sets CORS and `Cache-Control: no-store`. It retains the
+validated Conversation `admission_id` and derives the response-attempt UUID as
+`uuid5(NAMESPACE_URL, 'main-chota.website-widget-response.v2:' + admission_id)`,
+so equal public `message_id` values in different owner or integration scopes stay
+independent. Conversation returns an explicit `SEND`, `REPLAY_COMPLETED`, or
+`DENY` action. `SEND` permits one socket write and completion. `REPLAY_COMPLETED`
+returns the same public JSON from successful same-admission evidence without
+creating another attempt or completion. `DENY` omits `reply`: a superseded Turn
+returns HTTP 409, while unresolved or failed transport evidence returns HTTP 503.
+`WRITE_COMPLETED` means local socket completion, not browser acknowledgement;
+failed, cancelled, and uncertain writes remain honest transport facts. Unknown,
+failed, and superseded attempts never authorize a resend, and a no-send attempt
+cannot append an AGENT Message. Reconciliation is bounded and joined even on
+cancellation.
 
 ## Credential-safe diagnostics
 
