@@ -5,7 +5,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from time import monotonic
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 
