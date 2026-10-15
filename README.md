@@ -303,11 +303,20 @@ one logical turn per message; HTTP disconnect does not cancel worker execution.
 `CONVERSATION_RESULT_WAIT_SECONDS` is 0–120 (default 120), and
 `CONVERSATION_RESULT_POLL_SECONDS` is 0.05–5 (default 0.25). A retained draft keeps
 `{"reply":"...","session_id":"..."}`. Before writing, the gateway commits a
-response intent and sets CORS and `Cache-Control: no-store`. Every physical response
-has a fresh response-attempt UUID. `WRITE_COMPLETED` means local socket completion,
-not browser acknowledgement; failed/cancelled/uncertain writes remain honest
-transport facts. Retry resends the retained draft with fresh evidence and no AI call.
-Reconciliation is bounded and joined even on request cancellation.
+response intent and sets CORS and `Cache-Control: no-store`. It retains the
+validated Conversation `admission_id` and derives the response-attempt UUID as
+`uuid5(NAMESPACE_URL, 'main-chota.website-widget-response.v2:' + admission_id)`,
+so equal public `message_id` values in different owner or integration scopes stay
+independent. Conversation returns an explicit `SEND`, `REPLAY_COMPLETED`, or
+`DENY` action. `SEND` permits one socket write and completion. `REPLAY_COMPLETED`
+returns the same public JSON from successful same-admission evidence without
+creating another attempt or completion. `DENY` omits `reply`: a superseded Turn
+returns HTTP 409, while unresolved or failed transport evidence returns HTTP 503.
+`WRITE_COMPLETED` means local socket completion, not browser acknowledgement;
+failed, cancelled, and uncertain writes remain honest transport facts. Unknown,
+failed, and superseded attempts never authorize a resend, and a no-send attempt
+cannot append an AGENT Message. Reconciliation is bounded and joined even on
+cancellation.
 
 ## Credential-safe diagnostics
 

@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-from uuid import uuid4
 
 import httpx
 from aiohttp import web
@@ -9,7 +8,12 @@ from aiohttp import web
 from core.logger import log_event
 from core.routing import RoutingPolicy, strict_uuid
 from api.middleware import apply_response_headers
-from services.conversation_client import ConversationConflict, ConversationUnavailable, WebsiteEnvelope
+from services.conversation_client import (
+    ConversationConflict,
+    ConversationUnavailable,
+    WebsiteEnvelope,
+    response_attempt_for,
+)
 from services.text_formatter import format_plain_text_reply
 
 
@@ -64,10 +68,11 @@ async def handle_chat(request: web.Request) -> web.Response:
             if conversation is None:
                 return web.json_response({"error": "Managed service unavailable"}, status=503)
             try:
-                disposition = await conversation.admit(envelope, "MANAGED" if selected else "LEGACY")
-                if disposition == "MANAGED":
-                    return await _managed_reply(request, conversation, envelope)
-                if disposition != "LEGACY":
+                admission = await conversation.admit(envelope, "MANAGED" if selected else "LEGACY")
+                if admission.route == "MANAGED":
+                    return await _managed_reply(
+                        request, conversation, envelope, admission.admission_id)
+                if admission.route != "LEGACY":
                     raise ConversationUnavailable("invalid_admission_disposition")
             except ConversationConflict:
                 return web.json_response({"error": "Message identity conflict"}, status=409)
@@ -100,7 +105,19 @@ async def _complete_transport(conversation, envelope, attempt: str, outcome: str
         raise asyncio.CancelledError
 
 
-async def _managed_reply(request: web.Request, conversation, envelope: WebsiteEnvelope) -> web.Response:
+def _public_managed_reply(request: web.Request, envelope: WebsiteEnvelope, draft_text: str) -> web.Response:
+    response = web.json_response({
+        "reply": format_plain_text_reply(draft_text),
+        "session_id": envelope.session_id,
+    })
+    response.headers["Cache-Control"] = "no-store"
+    apply_response_headers(request, response)
+    return response
+
+
+async def _managed_reply(
+    request: web.Request, conversation, envelope: WebsiteEnvelope, admission_id: str
+) -> web.Response:
     result = await conversation.wait_result(envelope)
     if result["state"] != "DRAFT_READY":
         error = "Managed result pending; retry the same message_id"
@@ -110,11 +127,30 @@ async def _managed_reply(request: web.Request, conversation, envelope: WebsiteEn
             error = "Managed result unavailable; retry the same message_id"
         return web.json_response({"error": error}, status=503)
 
-    attempt = str(uuid4())  # Transport identity, never canonical message identity.
-    draft = await conversation.begin_response(envelope, attempt)
-    response = web.json_response({"reply": format_plain_text_reply(draft), "session_id": envelope.session_id})
-    response.headers["Cache-Control"] = "no-store"
-    apply_response_headers(request, response)
+    # A retry of the same canonical request keeps the same transport identity,
+    # including when this Gateway process restarted after a socket write.
+    attempt = response_attempt_for(admission_id)
+    intent = await conversation.begin_response(envelope, attempt)
+    if intent.action == "REPLAY_COMPLETED":
+        # This serves the immutable cached public result. It must not create a
+        # second completion fact for the failed or denied requested v2 row.
+        return _public_managed_reply(request, envelope, intent.draft_text)
+    if intent.action == "DENY":
+        # A retained draft is content, not permission. Superseded output is a
+        # conflict; unresolved delivery evidence asks the client to retry later.
+        superseded = intent.denial_reason == "SUPERSEDED"
+        response = web.json_response(
+            {"error": ("response_superseded" if superseded else "response_unavailable"),
+             "session_id": envelope.session_id}, status=409 if superseded else 503
+        )
+        response.headers["Cache-Control"] = "no-store"
+        apply_response_headers(request, response)
+        return response
+    if intent.action != "SEND" or not intent.send:
+        # The client validates this contract too; keep the public handler
+        # fail-closed if a test double or alternate client violates it.
+        raise ConversationUnavailable("invalid_response_intent")
+    response = _public_managed_reply(request, envelope, intent.draft_text)
     outcome = "UNKNOWN"
     try:
         await response.prepare(request)

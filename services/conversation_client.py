@@ -5,12 +5,23 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from time import monotonic
+from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 
 from core.logger import log_event
+from core.routing import strict_uuid
 
 _BASE = "/internal/v1/website"
+
+
+def response_attempt_for(admission_id: str) -> str:
+    """Return the stable v2 transport identity for one durable admission."""
+    canonical_admission_id = strict_uuid(admission_id)
+    return str(uuid5(
+        NAMESPACE_URL,
+        f"main-chota.website-widget-response.v2:{canonical_admission_id}",
+    ))
 
 
 class ConversationUnavailable(Exception):
@@ -32,6 +43,24 @@ class WebsiteEnvelope:
 
     def lookup(self) -> dict[str, str]:
         return {key: getattr(self, key) for key in ("owner_id", "integration_id", "agent_id", "session_id", "message_id")}
+
+
+@dataclass(frozen=True)
+class WebsiteAdmission:
+    route: str
+    admission_id: str
+    replayed: bool
+
+
+@dataclass(frozen=True)
+class WebsiteResponseIntent:
+    response_attempt_id: str
+    draft_text: str
+    action: str
+    send: bool
+    replayed: bool
+    replay_source_attempt_id: str | None = None
+    denial_reason: str | None = None
 
 
 class ConversationClient:
@@ -59,13 +88,20 @@ class ConversationClient:
             log_event(logging.ERROR, "conversation_unavailable", exc=exc)
             raise ConversationUnavailable("managed_service_unavailable") from None
 
-    async def admit(self, envelope: WebsiteEnvelope, desired_route: str) -> str:
+    async def admit(self, envelope: WebsiteEnvelope, desired_route: str) -> WebsiteAdmission:
         data = await self._post("/admissions", {**envelope.lookup(), "text": envelope.text,
                                                 "desired_route": desired_route})
         route = data.get("route")
-        if route not in ("MANAGED", "LEGACY"):
+        admission_id = data.get("admission_id")
+        replayed = data.get("replayed")
+        if (route not in ("MANAGED", "LEGACY")
+                or type(replayed) is not bool):
             raise ConversationUnavailable("invalid_admission_disposition")
-        return route
+        try:
+            canonical_admission_id = strict_uuid(admission_id)
+        except ValueError:
+            raise ConversationUnavailable("invalid_admission_disposition") from None
+        return WebsiteAdmission(route, canonical_admission_id, replayed)
 
     async def wait_result(self, envelope: WebsiteEnvelope) -> dict:
         deadline = monotonic() + self.result_wait
@@ -80,11 +116,46 @@ class ConversationClient:
                 return data
             await asyncio.sleep(min(self.poll_interval, max(0, deadline - monotonic())))
 
-    async def begin_response(self, envelope: WebsiteEnvelope, response_attempt_id: str) -> str:
+    async def begin_response(
+        self, envelope: WebsiteEnvelope, response_attempt_id: str
+    ) -> WebsiteResponseIntent:
         data = await self._post("/responses/begin", {**envelope.lookup(), "response_attempt_id": response_attempt_id})
-        if data.get("response_attempt_id") != response_attempt_id or not isinstance(data.get("draft_text"), str):
+        action = data.get("action")
+        replay_source_attempt_id = data.get("replay_source_attempt_id")
+        denial_reason = data.get("denial_reason")
+        if (data.get("response_attempt_id") != response_attempt_id
+                or not isinstance(data.get("draft_text"), str)
+                or type(data.get("send")) is not bool
+                or type(data.get("replayed")) is not bool
+                or denial_reason not in {None, "SUPERSEDED", "DELIVERY_NOT_RETRYABLE"}
+                or action not in {"SEND", "REPLAY_COMPLETED", "DENY"}):
             raise ConversationUnavailable("invalid_response_intent")
-        return data["draft_text"]
+
+        if replay_source_attempt_id is not None:
+            try:
+                replay_source_attempt_id = strict_uuid(replay_source_attempt_id)
+            except ValueError:
+                raise ConversationUnavailable("invalid_response_intent") from None
+
+        valid = (
+            (action == "SEND" and data["send"] and not data["replayed"]
+             and replay_source_attempt_id is None and denial_reason is None)
+            or (action == "REPLAY_COMPLETED" and not data["send"] and data["replayed"]
+                and replay_source_attempt_id is not None and denial_reason is None)
+            or (action == "DENY" and not data["send"] and replay_source_attempt_id is None
+                and denial_reason is not None)
+        )
+        if not valid:
+            raise ConversationUnavailable("invalid_response_intent")
+        return WebsiteResponseIntent(
+            response_attempt_id=response_attempt_id,
+            draft_text=data["draft_text"],
+            action=action,
+            send=data["send"],
+            replayed=data["replayed"],
+            replay_source_attempt_id=replay_source_attempt_id,
+            denial_reason=denial_reason,
+        )
 
     async def complete_response(self, envelope: WebsiteEnvelope, response_attempt_id: str, outcome: str) -> None:
         data = await self._post("/responses/complete", {**envelope.lookup(), "response_attempt_id": response_attempt_id,
