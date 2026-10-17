@@ -120,12 +120,23 @@ async def _managed_reply(
 ) -> web.Response:
     result = await conversation.wait_result(envelope)
     if result["state"] != "DRAFT_READY":
-        error = "Managed result pending; retry the same message_id"
-        if result["state"] == "UNKNOWN":
-            error = "Managed execution uncertain; retry the same message_id"
-        elif result["state"] in ("FAILED", "NO_RESPONSE"):
-            error = "Managed result unavailable; retry the same message_id"
-        return web.json_response({"error": error}, status=503)
+        # Keep the durable admission and ask the widget to retry the same
+        # message_id, but say it in the caller's language, not as a 503 slug.
+        code, error = {
+            "PENDING": ("result_pending",
+                        "Ещё формирую ответ — отправьте сообщение ещё раз через пару секунд."),
+            "UNKNOWN": ("execution_uncertain",
+                        "Не удалось подтвердить ответ. Повторите сообщение."),
+            "FAILED": ("result_unavailable",
+                       "Не получилось подготовить ответ. Повторите сообщение."),
+            "NO_RESPONSE": ("result_unavailable",
+                            "Не получилось подготовить ответ. Повторите сообщение."),
+        }.get(result["state"], ("result_unavailable",
+                                "Не получилось подготовить ответ. Повторите сообщение."))
+        response = web.json_response({"error": error, "code": code, "retryable": True}, status=503)
+        response.headers["Cache-Control"] = "no-store"
+        apply_response_headers(request, response)
+        return response
 
     # A retry of the same canonical request keeps the same transport identity,
     # including when this Gateway process restarted after a socket write.

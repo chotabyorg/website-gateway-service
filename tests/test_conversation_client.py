@@ -21,6 +21,12 @@ ADMISSION_ID = "66666666-6666-4666-8666-666666666666"
 SOURCE_ATTEMPT_ID = "77777777-7777-4777-8777-777777777777"
 
 
+def test_website_poll_initial_is_clamped_to_interval():
+    client = ConversationClient("http://unused", "token", poll_interval=0.01, poll_initial=1.0)
+    assert client.poll_initial == 0.01
+    assert client.poll_interval == 0.01
+
+
 def test_website_response_attempt_is_stable_and_scoped_to_admission():
     first = response_attempt_for(ADMISSION_ID)
     expected = str(uuid5(NAMESPACE_URL, f"main-chota.website-widget-response.v2:{ADMISSION_ID}"))

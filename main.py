@@ -50,6 +50,7 @@ async def main() -> None:
             request_timeout=settings.CONVERSATION_REQUEST_TIMEOUT_SECONDS,
             result_wait=settings.CONVERSATION_RESULT_WAIT_SECONDS,
             poll_interval=settings.CONVERSATION_RESULT_POLL_SECONDS,
+            poll_initial=settings.CONVERSATION_RESULT_POLL_INITIAL_SECONDS,
         )
     await key_manager.reconcile()
     if key_manager.active_count() == 0:
