@@ -65,11 +65,13 @@ class WebsiteResponseIntent:
 
 class ConversationClient:
     def __init__(self, base_url: str, token: str, *, request_timeout: float = 10,
-                 result_wait: float = 120, poll_interval: float = 0.25) -> None:
+                 result_wait: float = 120, poll_interval: float = 0.5,
+                 poll_initial: float = 0.1) -> None:
         self.client = httpx.AsyncClient(base_url=base_url, timeout=request_timeout,
                                        headers={"X-Service-Token": token})
         self.result_wait = result_wait
         self.poll_interval = poll_interval
+        self.poll_initial = min(poll_initial, poll_interval)
 
     async def _post(self, path: str, payload: dict) -> dict:
         try:
@@ -105,6 +107,10 @@ class ConversationClient:
 
     async def wait_result(self, envelope: WebsiteEnvelope) -> dict:
         deadline = monotonic() + self.result_wait
+        # Start responsive, then back off to the configured ceiling: short
+        # answers are fetched immediately while a long managed turn no longer
+        # produces a request every few hundred milliseconds for minutes.
+        delay = self.poll_initial
         while True:
             data = await self._post("/results", envelope.lookup())
             state = data.get("state")
@@ -114,7 +120,8 @@ class ConversationClient:
                 raise ConversationUnavailable("invalid_retained_draft")
             if state != "PENDING" or monotonic() >= deadline:
                 return data
-            await asyncio.sleep(min(self.poll_interval, max(0, deadline - monotonic())))
+            await asyncio.sleep(min(delay, max(0, deadline - monotonic())))
+            delay = min(self.poll_interval, max(self.poll_initial, delay * 2))
 
     async def begin_response(
         self, envelope: WebsiteEnvelope, response_attempt_id: str

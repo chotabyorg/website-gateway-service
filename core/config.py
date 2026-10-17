@@ -20,7 +20,8 @@ class Settings(BaseSettings):
     CONVERSATION_S2S_TOKEN: SecretStr = SecretStr("")
     CONVERSATION_REQUEST_TIMEOUT_SECONDS: float = 10.0
     CONVERSATION_RESULT_WAIT_SECONDS: float = 120.0
-    CONVERSATION_RESULT_POLL_SECONDS: float = 0.25
+    CONVERSATION_RESULT_POLL_SECONDS: float = 0.5
+    CONVERSATION_RESULT_POLL_INITIAL_SECONDS: float = 0.1
 
     HOST: str = "0.0.0.0"
     PORT: int = 8080
@@ -38,6 +39,8 @@ class Settings(BaseSettings):
             raise ValueError("invalid_conversation_result_wait")
         if not 0.05 <= self.CONVERSATION_RESULT_POLL_SECONDS <= 5:
             raise ValueError("invalid_conversation_poll_interval")
+        if not 0.05 <= self.CONVERSATION_RESULT_POLL_INITIAL_SECONDS <= self.CONVERSATION_RESULT_POLL_SECONDS:
+            raise ValueError("invalid_conversation_poll_initial")
         return self
 
     def routing_policy(self) -> RoutingPolicy:
