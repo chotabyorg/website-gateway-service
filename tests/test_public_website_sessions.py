@@ -208,3 +208,21 @@ def test_explicit_proxy_configuration(cidrs):
     else:
         with pytest.raises(ValueError):
             WebsitePublicPolicy.parse(trusted_proxies=cidrs)
+
+
+def test_common_cohort_requires_matching_guard_and_private_peer(load_module):
+    from pydantic import ValidationError
+    config = load_module("core.config")
+    assert not config.settings.public_session_policy().integrations
+    common = json.dumps({INTEGRATION: AGENT})
+    for extra in ({}, {"MANAGED_WEBSITE_GUARDED_INTEGRATIONS": common}):
+        with pytest.raises(ValidationError):
+            config.Settings(_env_file=None, COMMON_WEBSITE_INTEGRATIONS=common, **extra)
+    selected = config.Settings(_env_file=None, COMMON_WEBSITE_INTEGRATIONS=common,
+        MANAGED_WEBSITE_GUARDED_INTEGRATIONS=common,
+        CONVERSATION_SERVICE_URL="http://old-conversation", CONVERSATION_S2S_TOKEN="fake-v2",
+        COMMON_WEBSITE_CONVERSATION_URL="https://conversation.internal.example",
+        COMMON_WEBSITE_CONVERSATION_PEER="conversation.internal.example",
+        COMMON_WEBSITE_S2S_TOKEN="fake-private")
+    assert selected.public_session_policy().integrations == {INTEGRATION: AGENT}
+    assert "fake-private" not in repr(selected)

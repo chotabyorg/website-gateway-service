@@ -318,8 +318,6 @@ failed, and superseded attempts never authorize a resend, and a no-send attempt
 cannot append an AGENT Message. Reconciliation is bounded and joined even on
 cancellation.
 
-## Credential-safe diagnostics
-
 ## Common credential session transport (default off)
 
 `POST /v1/sessions` accepts an empty JSON object and issues a fresh session/token.
