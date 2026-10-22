@@ -15,6 +15,7 @@ def apply_response_headers(request: web.Request, response: web.StreamResponse) -
     # The managed handler explicitly prepares/writes; these must precede prepare.
     response.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "*")
     response.headers["Access-Control-Allow-Headers"] = _CORS_HEADERS["Access-Control-Allow-Headers"]
+    response.headers["Access-Control-Expose-Headers"] = "Retry-After"
 
 
 @web.middleware
