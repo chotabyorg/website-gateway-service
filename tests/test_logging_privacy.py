@@ -61,7 +61,9 @@ async def test_httpx_success404_status_and_transport_use_only_safe_diagnostics(c
     def respond(request):
         state = states.pop(0)
         if state == 200:
-            return httpx.Response(200, json={'owner_id': 'opaque', 'integration_id': 'opaque', 'agent_id': 'opaque', 'config': {}})
+            return httpx.Response(200, json={'owner_id': 'opaque', 'integration_id': 'opaque',
+                'agent_id': 'opaque', 'config': {}, 'conversation_required': False,
+                'binding_generation': 1})
         return httpx.Response(state, json={'detail': SENTINELS[3]})
     client.client = httpx.AsyncClient(base_url='http://control-plane', transport=httpx.MockTransport(respond))
     assert await client.validate_widget_key(SENTINELS[0]) is not None

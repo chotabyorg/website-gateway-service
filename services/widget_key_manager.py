@@ -15,6 +15,8 @@ class WidgetInfo:
     owner_id: str
     widget_api_key: str
     config: dict
+    conversation_required: bool = False
+    binding_generation: int = 1
 
 
 class WidgetKeyManager:
@@ -60,6 +62,8 @@ class WidgetKeyManager:
             owner_id=validated.owner_id,
             widget_api_key=api_key,
             config=validated.config,
+            conversation_required=validated.conversation_required,
+            binding_generation=validated.binding_generation,
         )
 
     def active_count(self) -> int:

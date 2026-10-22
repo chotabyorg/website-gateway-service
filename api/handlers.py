@@ -29,6 +29,11 @@ async def handle_chat(request: web.Request) -> web.Response:
         return web.json_response({"error": "Widget validation unavailable"}, status=503)
     if widget_info is None:
         return web.json_response({"error": "Invalid widget key"}, status=401)
+    if widget_info.conversation_required:
+        response = web.json_response(
+            {"error": "Conversation session required", "code": "session_required"}, status=409)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     try:
         body = await request.json()

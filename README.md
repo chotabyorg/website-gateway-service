@@ -320,6 +320,16 @@ cancellation.
 
 ## Credential-safe diagnostics
 
+Chat validation requires the private Control Plane `conversation_required` boolean
+and positive integer `binding_generation`. Missing or malformed fields return a
+bounded 503. Deploy the compatible Control Plane reader first. A retained
+Conversation enrollment makes the legacy `/v1/chat` return `409 session_required`,
+including when gateway cohort configuration was removed. Fresh validation runs
+on every request; browser fields and the reconciled widget appearance cache cannot
+clear the routing fence. The credential-bearing session transport is a separate
+rollout gate and is not enabled by this change. Initial enrollment still requires
+the pinned gateway guard and positive retirement of legacy writers.
+
 Startup installs record and output-sink protections before clients start. HTTPX,
 httpcore and aiohttp dependency/access/error records are suppressed at every level,
 including descendants; the actual AppRunner uses `access_log=None`. Supported

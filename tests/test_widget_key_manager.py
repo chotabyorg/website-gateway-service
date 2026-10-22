@@ -108,6 +108,8 @@ async def test_chat_validation_uses_control_plane_owner_response():
             "agent_id": "agent-current",
             "owner_id": "owner-current",
             "config": {"primary_color": "#123456"},
+            "conversation_required": True,
+            "binding_generation": 3,
         },
     )()
     manager = WidgetKeyManager(cp)
@@ -118,4 +120,5 @@ async def test_chat_validation_uses_control_plane_owner_response():
     assert info.integration_id == "int-current"
     assert info.agent_id == "agent-current"
     assert info.owner_id == "owner-current"
+    assert info.conversation_required is True and info.binding_generation == 3
     cp.validate_widget_key.assert_awaited_once_with("wk_abc")
