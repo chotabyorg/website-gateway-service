@@ -433,3 +433,129 @@ def test_poll_configuration_defaults_off_and_requires_valid_common_cohort(load_m
         COMMON_WEBSITE_S2S_TOKEN="fake-private", COMMON_WEBSITE_POLL_ENABLED=True,
         COMMON_WEBSITE_POLL_WAIT_SECONDS=0.1)
     assert selected.COMMON_WEBSITE_POLL_WAIT_SECONDS == 0.1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lost_begin", [False, True])
+async def test_attested_poll_registers_and_closes_before_completion(lost_begin):
+    peer = Peer()
+    if lost_begin:
+        peer.begin_error = TimeoutError()
+    transport = WebsitePollTransport(peer, wait_seconds=1)
+    registered, register_ack = asyncio.Event(), asyncio.Event()
+    witnessed, witness_ack = asyncio.Event(), asyncio.Event()
+    events, descriptions = [], []
+    async def register(desc):
+        descriptions.append(desc)
+        registered.set()
+        await register_ack.wait()
+        events.append("registered")
+    async def close(desc):
+        descriptions.append(desc)
+        witnessed.set()
+        await witness_ack.wait()
+        events.append("witness")
+    transport.attestor = SimpleNamespace(required=lambda _: True,
+        identity=lambda: (uuid4(), uuid4()), register=register, close=close)
+    async def write(request, response):
+        events.append("write")
+    transport._write = write
+    original_complete = peer.complete
+    async def complete(command):
+        assert events[-1] == "witness"
+        events.append("complete")
+        return await original_complete(command)
+    peer.complete = complete
+    running = asyncio.create_task(transport.run(SimpleNamespace(transport=None),
+                                               WebsiteSessionAccess(**ACCESS)))
+    await registered.wait()
+    assert not any(name == "begin" for name, _ in peer.calls)
+    register_ack.set()
+    await witnessed.wait()
+    assert not peer.completed
+    running.cancel()
+    await asyncio.sleep(0)
+    running.cancel()
+    await asyncio.sleep(0)
+    assert not running.done()
+    witness_ack.set()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert len(peer.completed) == 1
+    assert peer.completed[0].outcome == ("UNKNOWN" if lost_begin else "WRITE_COMPLETED")
+    assert descriptions[0] == descriptions[1]
+    assert not {"session_token", "poll_id", "recover_only", "text", "conversation_id"} & descriptions[0].keys()
+    assert TOKEN not in json.dumps(descriptions)
+    assert descriptions[0]["channel"] == "WEBSITE_WIDGET"
+
+
+@pytest.mark.asyncio
+async def test_attested_poll_cancel_during_begin_never_exposes_candidate_text():
+    peer = Peer()
+    peer.begin_release = asyncio.Event()
+    transport = WebsitePollTransport(peer, wait_seconds=1)
+    witness = asyncio.Event()
+    async def close(desc):
+        assert peer.begin_release.is_set()
+        witness.set()
+    transport.attestor = SimpleNamespace(required=lambda _: True,
+        identity=lambda: (uuid4(), uuid4()), register=AsyncMock(), close=close)
+    transport._write = AsyncMock()
+    running = asyncio.create_task(transport.run(SimpleNamespace(transport=None),
+                                               WebsiteSessionAccess(**ACCESS)))
+    await peer.begin_entered.wait()
+    running.cancel()
+    await asyncio.sleep(0)
+    running.cancel()
+    await asyncio.sleep(0)
+    assert not witness.is_set()
+    peer.begin_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert witness.is_set()
+    transport._write.assert_not_awaited()
+    assert peer.completed[0].outcome == "UNKNOWN"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_stage", ["begin", "write"])
+async def test_mixed_cohort_poll_keeps_original_identity_through_completion(blocked_stage):
+    peer = Peer()
+    transport = WebsitePollTransport(peer, wait_seconds=2)
+    original_ids = transport.supplier_instance_id, transport.process_incarnation_id
+    parent_ids = uuid4(), uuid4()
+    attested_integration = uuid4()
+    transport.attestor = SimpleNamespace(required=lambda value: value["integration_id"] == str(attested_integration),
+        identity=lambda: parent_ids, register=AsyncMock(), close=AsyncMock())
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_begin, original_poll = peer.begin, peer.begin_poll
+    async def begin(command):
+        if blocked_stage == "begin":
+            entered.set()
+            await release.wait()
+        return await original_begin(command)
+    async def poll(command):
+        if command.integration_id == attested_integration:
+            assert (command.supplier_instance_id, command.process_incarnation_id) == parent_ids
+            return WebsitePollStarted(state="RECOVER_ONLY")
+        return await original_poll(command)
+    async def write(request, response):
+        if request.original and blocked_stage == "write":
+            entered.set()
+            await release.wait()
+    peer.begin, peer.begin_poll, transport._write = begin, poll, write
+    original = asyncio.create_task(transport.run(SimpleNamespace(transport=None, original=True),
+                                                WebsiteSessionAccess(**ACCESS)))
+    await entered.wait()
+    attested = WebsiteSessionAccess(**{**ACCESS, "integration_id": attested_integration})
+    await transport.run(SimpleNamespace(transport=None, original=False), attested)
+    release.set()
+    await original
+    assert len(peer.completed) == 1
+    completion = peer.completed[0]
+    assert (completion.supplier_instance_id, completion.process_incarnation_id) == original_ids
+    assert (completion.writer_end.supplier_instance_id, completion.writer_end.process_incarnation_id) == original_ids
+    for name, command in peer.calls:
+        if name in {"begin_poll", "work", "begin", "end_poll"}:
+            assert (command.supplier_instance_id, command.process_incarnation_id) == original_ids
+    assert (transport.supplier_instance_id, transport.process_incarnation_id) == original_ids
