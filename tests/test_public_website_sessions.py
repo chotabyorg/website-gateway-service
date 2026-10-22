@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+import pytest_asyncio
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from multidict import CIMultiDict
@@ -23,7 +24,7 @@ HEADERS = {"X-Widget-Key": "wk_fixture", "X-Forwarded-Proto": "https",
            "X-Real-IP": "192.0.2.1", "X-Widget-Session-Token": TOKEN}
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def public():
     calls, state = [], {"status": 200, "items": []}
 
@@ -64,6 +65,7 @@ async def public():
         await private.close()
 
 
+@pytest.mark.asyncio
 async def test_create_message_history_use_server_identity_and_private_json(public):
     created = await public.client.post("/v1/sessions", json={}, headers=HEADERS)
     assert created.status == 201
@@ -103,6 +105,7 @@ async def test_create_message_history_use_server_identity_and_private_json(publi
     ("/history", {"session_id": SESSION, "cursor": "opaque"}),
     ("/history", {"session_id": SESSION, "limit": 1000}),
 ])
+@pytest.mark.asyncio
 async def test_public_fields_are_closed_before_private_io(public, path, payload):
     result = await public.client.post("/v1/sessions" + path, json=payload, headers=HEADERS)
     assert result.status == 400
@@ -114,6 +117,7 @@ async def test_public_fields_are_closed_before_private_io(public, path, payload)
     {"X-Forwarded-Proto": "https,http", "X-Real-IP": "192.0.2.1"},
     {"X-Forwarded-Proto": "https", "X-Real-IP": "192.0.2.1,192.0.2.2"},
 ])
+@pytest.mark.asyncio
 async def test_missing_or_ambiguous_tls_proof_has_zero_credentials_io(public, extra):
     result = await public.client.post("/v1/sessions", json={},
         headers={"X-Widget-Key": "wk_fixture", **extra})
@@ -122,6 +126,7 @@ async def test_missing_or_ambiguous_tls_proof_has_zero_credentials_io(public, ex
 
 
 @pytest.mark.parametrize("name", ["X-Forwarded-Proto", "X-Real-IP", "X-Widget-Key"])
+@pytest.mark.asyncio
 async def test_duplicate_trust_headers_rejected(public, name):
     headers = CIMultiDict(HEADERS)
     headers.add(name, HEADERS[name])
@@ -130,6 +135,7 @@ async def test_duplicate_trust_headers_rejected(public, name):
     assert public.calls == [] and public.cp.validate_widget_key.await_count == 0
 
 
+@pytest.mark.asyncio
 async def test_untrusted_http_forwarding_cannot_assert_https(public):
     public.app["public_session_policy"] = WebsitePublicPolicy.parse(
         json.dumps({INTEGRATION: AGENT}), "10.0.0.1/32")
@@ -143,6 +149,7 @@ async def test_untrusted_http_forwarding_cannot_assert_https(public):
     (b'{"unknown":"' + b'a' * 65536 + b'"}', 413),
     (b'[]', 400), (b'null', 400), (b'\xff', 400),
 ], ids=["duplicate", "oversize", "array", "null", "non-utf8"])
+@pytest.mark.asyncio
 async def test_bounded_public_json_before_private_io(public, body, status):
     result = await public.client.post("/v1/sessions", data=body,
         headers={**HEADERS, "Content-Type": "application/json"})
@@ -151,6 +158,7 @@ async def test_bounded_public_json_before_private_io(public, body, status):
 
 
 @pytest.mark.parametrize("token", ["", "bad", "a" * 44])
+@pytest.mark.asyncio
 async def test_missing_or_malformed_capability_cannot_read(public, token):
     result = await public.client.post("/v1/sessions/history", json={"session_id": SESSION},
                                       headers={**HEADERS, "X-Widget-Session-Token": token})
@@ -158,6 +166,7 @@ async def test_missing_or_malformed_capability_cannot_read(public, token):
 
 
 @pytest.mark.parametrize("status", [404, 409, 413, 429, 500])
+@pytest.mark.asyncio
 async def test_private_failures_are_bounded_and_preserve_rate_limit(public, status):
     public.state["status"] = status
     result = await public.client.post("/v1/sessions", json={}, headers=HEADERS)
@@ -169,6 +178,7 @@ async def test_private_failures_are_bounded_and_preserve_rate_limit(public, stat
     assert len(public.calls) == 1
 
 
+@pytest.mark.asyncio
 async def test_disabled_cohort_precedes_tls_body_and_key_processing(public):
     public.app["public_session_policy"] = WebsitePublicPolicy.parse()
     result = await public.client.post("/v1/sessions", data=b'not-json')
@@ -176,6 +186,7 @@ async def test_disabled_cohort_precedes_tls_body_and_key_processing(public):
 
 
 @pytest.mark.parametrize("required,agent", [(False, AGENT), (True, str(uuid4()))])
+@pytest.mark.asyncio
 async def test_fresh_private_binding_cannot_be_overridden(public, required, agent):
     public.cp.validate_widget_key.return_value = WidgetValidation(INTEGRATION, agent,
         "trusted-owner", {}, required, 7)
