@@ -401,3 +401,64 @@ isolated release branch does not change production desired state. Record GitOps
 revision, ArgoCD revision and actual ready runtime images separately. The concrete
 cross-service staging, credential-proof, canary and rollback gates remain in
 GitOps `services/conversation-service/RELEASE.md`.
+
+
+## Production writer attestor and exact legacy drain (default off)
+
+The container now starts `python -m services.writer_attestor` as PID1. This small
+parent starts one `services.writer_child`, mints fresh supplier/process IDs and
+a private Unix-socket capability, and retains the actual OS child handle. The
+child cannot fork or launch sender subprocesses; existing text transports run
+inline. The same `writer_attestor.py`, `writer_child.py`, and `legacy_drain.py`
+are mirrored in Telegram and Website, with identical native process tests.
+
+Configure the parent using environment variables (not child `.env` settings):
+
+- `WRITER_ATTESTOR_SCOPES`: JSON list of exact
+  `{owner_id,integration_id,agent_id,channel}` entries (maximum 64), empty by default.
+  Channels are `TELEGRAM` or `WEBSITE_WIDGET`. A configured integration whose
+  scope/context does not match fails closed.
+- `WRITER_PRODUCER_URL` and `WRITER_PRODUCER_TOKEN`: dedicated Conversation producer
+  URL/token. The token has only matching registration/witness scope, never send,
+  proof-reader or retirement authority. Parent removes producer, proof-reader
+  and retirement credentials from the child's environment. Same-UID arbitrary
+  code execution is outside this trusted-process capability boundary.
+- `WRITER_LEGACY_DRAIN_SCOPES`: separate retained JSON list containing the same
+  exact scope plus positive integer `lifecycle_generation` and `drain_generation`.
+  Every attested scope requires a matching drain entry at parent startup. Retain
+  this list when rolling back active channel cohorts; deleting it is not a safe
+  rollback. It fences raw/v1 new work and unsupported replies. Telegram pauses
+  before advancing provider offsets; Website returns 503 before body/admission.
+
+An attested writer registers its exact text-free one-shot descriptor before Begin.
+Registration is not acquisition. Only existing Conversation Begin may authorize
+a send; ambiguous Begin never sends. The exact original begin/provider/socket
+tasks are joined through repeated cancellation, the local slot is permanently
+closed, and the parent durably uploads `TASKS_FENCED_AND_JOINED` before original
+completion. Website registration excludes visitor tokens and Conversation derives
+the canonical root from the retained session scope. Lost network ACKs retain and
+retry identical registration/witness IDs and timestamps. A closed local slot never
+reopens. Witness failure holds ownership and leaves delivery UNKNOWN.
+
+Only actual `wait()` of the exact child allows `PROCESS_TERMINATED`; signals,
+timeouts and missing PIDs are not proof. After exit the parent persists closure
+for every registered slot before starting a replacement. Whole-parent loss before
+durable witness leaves UNKNOWN/LIVE; Conversation retains already acknowledged
+witnesses and its recovery worker owns retirement. No gateway retirement credential
+is necessary. Parent metadata has a 4096-slot fail-closed bound per child lifetime;
+capacity exhaustion requires a controlled child restart, not descriptor eviction.
+
+The child publishes a private `drain.json` next to its Unix socket under
+`/tmp/chota-attestor-*` (the exact path is `WRITER_CHILD_DRAIN_RECEIPT`). Receipts
+include configured scope/generations, fresh supplier/process identity and acquired,
+active and positively joined task counts. They explicitly cover the current
+process only. They cannot attest a preceding unsupervised process or erase an
+existing uncertain legacy delivery. Before enrollment, separately prove old
+runtime drain, inspect retained Conversation attempts/Turns/grants and preserve
+the exact admission fence. Do not enable broader cohorts as part of this change.
+
+Native tests use real processes and pipes, actual child kill/wait, parent SIGKILL
+before/after durable evidence, lost registration/witness ACKs, wrong IDs, repeated
+cancellation and positive joins. Linux PR CI also builds the image without
+publishing it. There are no local Docker, production, provider or model calls
+in these tests. Rollout still requires exact-source/image/security/authority review.

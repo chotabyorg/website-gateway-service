@@ -433,3 +433,85 @@ def test_poll_configuration_defaults_off_and_requires_valid_common_cohort(load_m
         COMMON_WEBSITE_S2S_TOKEN="fake-private", COMMON_WEBSITE_POLL_ENABLED=True,
         COMMON_WEBSITE_POLL_WAIT_SECONDS=0.1)
     assert selected.COMMON_WEBSITE_POLL_WAIT_SECONDS == 0.1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lost_begin", [False, True])
+async def test_attested_poll_registers_and_closes_before_completion(lost_begin):
+    peer = Peer()
+    if lost_begin:
+        peer.begin_error = TimeoutError()
+    transport = WebsitePollTransport(peer, wait_seconds=1)
+    registered, register_ack = asyncio.Event(), asyncio.Event()
+    witnessed, witness_ack = asyncio.Event(), asyncio.Event()
+    events, descriptions = [], []
+    async def register(desc):
+        descriptions.append(desc)
+        registered.set()
+        await register_ack.wait()
+        events.append("registered")
+    async def close(desc):
+        descriptions.append(desc)
+        witnessed.set()
+        await witness_ack.wait()
+        events.append("witness")
+    transport.attestor = SimpleNamespace(required=lambda _: True,
+        identity=lambda: (uuid4(), uuid4()), register=register, close=close)
+    async def write(request, response):
+        events.append("write")
+    transport._write = write
+    original_complete = peer.complete
+    async def complete(command):
+        assert events[-1] == "witness"
+        events.append("complete")
+        return await original_complete(command)
+    peer.complete = complete
+    running = asyncio.create_task(transport.run(SimpleNamespace(transport=None),
+                                               WebsiteSessionAccess(**ACCESS)))
+    await registered.wait()
+    assert not any(name == "begin" for name, _ in peer.calls)
+    register_ack.set()
+    await witnessed.wait()
+    assert not peer.completed
+    running.cancel()
+    await asyncio.sleep(0)
+    running.cancel()
+    await asyncio.sleep(0)
+    assert not running.done()
+    witness_ack.set()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert len(peer.completed) == 1
+    assert peer.completed[0].outcome == ("UNKNOWN" if lost_begin else "WRITE_COMPLETED")
+    assert descriptions[0] == descriptions[1]
+    assert not {"session_token", "poll_id", "recover_only", "text", "conversation_id"} & descriptions[0].keys()
+    assert TOKEN not in json.dumps(descriptions)
+    assert descriptions[0]["channel"] == "WEBSITE_WIDGET"
+
+
+@pytest.mark.asyncio
+async def test_attested_poll_cancel_during_begin_never_exposes_candidate_text():
+    peer = Peer()
+    peer.begin_release = asyncio.Event()
+    transport = WebsitePollTransport(peer, wait_seconds=1)
+    witness = asyncio.Event()
+    async def close(desc):
+        assert peer.begin_release.is_set()
+        witness.set()
+    transport.attestor = SimpleNamespace(required=lambda _: True,
+        identity=lambda: (uuid4(), uuid4()), register=AsyncMock(), close=close)
+    transport._write = AsyncMock()
+    running = asyncio.create_task(transport.run(SimpleNamespace(transport=None),
+                                               WebsiteSessionAccess(**ACCESS)))
+    await peer.begin_entered.wait()
+    running.cancel()
+    await asyncio.sleep(0)
+    running.cancel()
+    await asyncio.sleep(0)
+    assert not witness.is_set()
+    peer.begin_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert witness.is_set()
+    transport._write.assert_not_awaited()
+    assert peer.completed[0].outcome == "UNKNOWN"

@@ -10,6 +10,7 @@ from aiohttp import web
 
 from api.middleware import apply_response_headers
 from services.website_session_client import WebsiteSessionError
+from services.writer_attestor import WriterAttestor, join_owned, AttestationUnavailable
 from services.website_session_contracts import (
     WebsiteDeliveryBegin, WebsiteDeliveryComplete, WebsitePollAccess,
     WebsitePollBegin, WebsiteSessionAccess,
@@ -73,6 +74,7 @@ class WebsitePollTransport:
         # These are original writer identities, not a host/process attestation.
         # A replacement process must get fresh identities and cannot join its predecessor.
         self.supplier_instance_id, self.process_incarnation_id = uuid4(), uuid4()
+        self.attestor = WriterAttestor()
 
     async def _write(self, request, response):
         apply_response_headers(request, response)
@@ -87,6 +89,9 @@ class WebsitePollTransport:
                             content_type="application/json", headers=headers)
 
     async def run(self, request, access: WebsiteSessionAccess, *, deadline=None):
+        attested = self.attestor.required({**access.model_dump(mode="json"), "channel": "WEBSITE_WIDGET"})
+        if attested:
+            self.supplier_instance_id, self.process_incarnation_id = self.attestor.identity()
         loop = asyncio.get_running_loop()
         deadline = min(deadline or loop.time() + self.wait_seconds,
                        loop.time() + self.wait_seconds)
@@ -113,7 +118,20 @@ class WebsitePollTransport:
             if write.error is not None and request.transport is not None:
                 request.transport.close()
 
+        def descriptor(begin):
+            return {**begin.model_dump(mode="json", exclude={"session_token", "poll_id", "recover_only"}),
+                    "contract_version": 1, "channel": "WEBSITE_WIDGET"}
+
+        async def close_slot(begin):
+            nonlocal cancelled
+            if attested:
+                result = await join_owned(self.attestor.close(descriptor(begin)))
+                cancelled = cancelled or result.cancelled
+                if result.error is not None:
+                    raise result.error
+
         async def completion(begin, outcome, error_code=None):
+            await close_slot(begin)
             # Both the original begin task and its only possible write task have
             # returned. No detached callback/future can subsequently write text.
             command = WebsiteDeliveryComplete(**begin.model_dump(exclude={"poll_id"}),
@@ -161,6 +179,13 @@ class WebsitePollTransport:
                         break
                     begin = WebsiteDeliveryBegin(**reservation.model_dump(),
                         **candidate.item.model_dump(), recover_only=False)
+                    if attested:
+                        registered = await joined(self.attestor.register(descriptor(begin)), self.call_timeout)
+                        if registered.error is not None:
+                            raise AttestationUnavailable()
+                        if cancelled:
+                            await close_slot(begin)
+                            break
                     acquired = await joined(self.client.begin(begin),
                         min(self.call_timeout, max(0.001, deadline - loop.time() - 0.05)))
                     if acquired.error is not None:
@@ -174,6 +199,7 @@ class WebsitePollTransport:
                         break
                     decision = acquired.value
                     if not decision.send:
+                        await close_slot(begin)
                         await finish(metadata(decision))
                         break
                     # Never expose discovery text. Only this positive original
@@ -204,6 +230,8 @@ class WebsitePollTransport:
                     break
                 if response is None:
                     await finish({"state": "EMPTY"})
+        except AttestationUnavailable:
+            await finish({"state": "RECOVER_ONLY"}, status=503)
         except WebsiteSessionError as error:
             await finish({"error": "Session unavailable"}, status=error.status,
                          retry_after=error.retry_after)

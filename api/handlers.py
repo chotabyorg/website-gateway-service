@@ -15,6 +15,7 @@ from services.conversation_client import (
     response_attempt_for,
 )
 from services.text_formatter import format_plain_text_reply
+from services.legacy_drain import legacy_drain
 
 
 async def handle_chat(request: web.Request) -> web.Response:
@@ -29,12 +30,29 @@ async def handle_chat(request: web.Request) -> web.Response:
         return web.json_response({"error": "Widget validation unavailable"}, status=503)
     if widget_info is None:
         return web.json_response({"error": "Invalid widget key"}, status=401)
+    if legacy_drain.fenced({"integration_id": widget_info.integration_id,
+                            "channel": "WEBSITE_WIDGET"}):
+        return web.json_response({"error": "Channel cutover in progress"}, status=503,
+                                 headers={"Cache-Control": "no-store", "Retry-After": "1"})
     if widget_info.conversation_required:
         response = web.json_response(
             {"error": "Conversation session required", "code": "session_required"}, status=409)
         response.headers["Cache-Control"] = "no-store"
         return response
 
+    async def owned_reply():
+        response = await _legacy_chat(request, widget_info)
+        if not response.prepared:
+            apply_response_headers(request, response)
+            await response.prepare(request)
+            await response.write_eof()
+        return response
+    return await legacy_drain.run({"integration_id": widget_info.integration_id,
+        "owner_id": widget_info.owner_id, "agent_id": widget_info.agent_id,
+        "channel": "WEBSITE_WIDGET"}, owned_reply)
+
+
+async def _legacy_chat(request, widget_info):
     try:
         body = await request.json()
     except (json.JSONDecodeError, Exception):

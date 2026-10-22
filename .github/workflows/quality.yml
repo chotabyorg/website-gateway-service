@@ -18,3 +18,5 @@ jobs:
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - run: python -m pip check
       - run: python -m pytest -q
+      - name: Build Linux container (no publication)
+        run: docker build --tag writer-attestor-ci .

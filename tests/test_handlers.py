@@ -201,3 +201,23 @@ async def test_health():
         data = await resp.json()
         assert data["status"] == "ok"
         assert data["active_widgets"] == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enrolled", [False, True])
+async def test_exact_drain_blocks_raw_and_managed_v1_before_parsing_or_admission(monkeypatch, enrolled):
+    from api import handlers
+    info = _make_widget_info()
+    info.conversation_required = enrolled
+    monkeypatch.setattr(handlers.legacy_drain, "configured", [dict(integration_id=info.integration_id,
+                                                                  channel="WEBSITE_WIDGET")])
+    core = AsyncMock()
+    app = _make_app(_make_key_manager(info), core)
+    app["conversation_client"] = AsyncMock()
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post("/v1/chat", data="invalid-json-no-admission",
+                                     headers={"X-Widget-Key": "wk_abc"})
+        assert response.status == 503
+        assert response.headers["Cache-Control"] == "no-store"
+    core.send_message.assert_not_awaited()
+    app["conversation_client"].admit.assert_not_awaited()
