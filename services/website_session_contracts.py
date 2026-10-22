@@ -67,6 +67,35 @@ class WebsiteSessionAdmission(WebsiteSessionAccess):
     text: TextContent
 
 
+class WebsitePollBegin(WebsiteSessionAccess):
+    request_id: UUID
+    supplier_instance_id: UUID
+    process_incarnation_id: UUID
+
+
+class WebsitePollStarted(Contract):
+    state: Literal["ACQUIRED", "RECOVER_ONLY"]
+    poll_id: UUID | None = None
+    deadline_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def closed_shape(self) -> "WebsitePollStarted":
+        acquired = self.state == "ACQUIRED"
+        if acquired != (self.poll_id is not None) or acquired != (self.deadline_at is not None):
+            raise ValueError("invalid poll grant shape")
+        return self
+
+
+class WebsitePollAccess(WebsiteSessionAccess):
+    poll_id: UUID
+    supplier_instance_id: UUID
+    process_incarnation_id: UUID
+
+
+class WebsitePollEnded(Contract):
+    replayed: StrictBool
+
+
 class WebsitePublicFrame(Contract):
     delivery_id: UUID
     actor: Literal["AGENT", "HUMAN"]
@@ -108,10 +137,14 @@ class WebsiteDeliveryWorkResult(Contract):
         return self
 
 
-class WebsiteDeliveryBegin(WebsiteSessionAccess, WebsiteDeliveryDescriptor):
+class WebsiteDeliveryIdentity(WebsiteSessionAccess, WebsiteDeliveryDescriptor):
     supplier_instance_id: UUID
     process_incarnation_id: UUID
     recover_only: StrictBool
+
+
+class WebsiteDeliveryBegin(WebsiteDeliveryIdentity, WebsitePollAccess):
+    pass
 
 
 class WebsiteDeliveryBegun(Contract):
@@ -135,7 +168,7 @@ class WebsiteWriterEnd(Contract):
     process_incarnation_id: UUID
 
 
-class WebsiteDeliveryComplete(WebsiteDeliveryBegin):
+class WebsiteDeliveryComplete(WebsiteDeliveryIdentity):
     outcome: Literal["WRITE_COMPLETED", "WRITE_FAILED", "UNKNOWN"]
     error_code: Literal["ORIGINAL_WRITE_REJECTED", "TRANSPORT_ERROR", "TIMEOUT"] | None = None
     writer_end: WebsiteWriterEnd | None = None

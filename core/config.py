@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     COMMON_WEBSITE_CONVERSATION_PEER: str = ""
     COMMON_WEBSITE_CONVERSATION_CA_FILE: str | None = None
     COMMON_WEBSITE_S2S_TOKEN: SecretStr = SecretStr("")
+    COMMON_WEBSITE_POLL_ENABLED: bool = False
+    COMMON_WEBSITE_POLL_WAIT_SECONDS: float = 20.0
 
     HOST: str = "0.0.0.0"
     PORT: int = 8080
@@ -40,6 +42,9 @@ class Settings(BaseSettings):
     def check_managed_configuration(self):
         policy = self.routing_policy()
         common = self.public_session_policy()
+        if (not 0.05 <= self.COMMON_WEBSITE_POLL_WAIT_SECONDS <= 20
+                or (self.COMMON_WEBSITE_POLL_ENABLED and not common.integrations)):
+            raise ValueError("invalid_common_website_poll_configuration")
         if common.integrations:
             if (not self.COMMON_WEBSITE_CONVERSATION_URL
                     or not self.COMMON_WEBSITE_CONVERSATION_PEER

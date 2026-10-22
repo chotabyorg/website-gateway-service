@@ -1,6 +1,7 @@
 """Credential-bearing Website ingress and history; Conversation owns all state."""
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Annotated
@@ -14,7 +15,7 @@ from core.routing import strict_uuid
 from services.website_session_client import WebsiteSessionError
 from services.website_session_contracts import (
     Contract, TextContent, WebsiteHistoryRequest, WebsiteSessionAdmission,
-    WebsiteSessionCreate, WebsiteSessionScope,
+    WebsiteSessionAccess, WebsiteSessionCreate, WebsiteSessionScope,
 )
 
 PublicUUID = Annotated[UUID, BeforeValidator(strict_uuid)]
@@ -33,6 +34,10 @@ class Message(Contract):
 class History(Contract):
     session_id: PublicUUID
     cursor: PublicUUID | None = None
+
+
+class Poll(Contract):
+    session_id: PublicUUID
 
 
 def response(payload, status=200, maximum=4096, retry_after=None):
@@ -68,8 +73,13 @@ async def read_body(request, model):
 async def handle(request, operation):
     policy = request.app.get("public_session_policy")
     client = request.app.get("website_session_client")
+    poll_transport = request.app.get("website_poll_transport")
+    if operation == "poll" and poll_transport is None:
+        return response({"error": "Not found"}, 404)
     if policy is None or not policy.integrations or client is None:
         return response({"error": "Not found"}, 404)
+    deadline = (asyncio.get_running_loop().time() + poll_transport.wait_seconds
+                if operation == "poll" else None)
     try:
         client_ip = policy.client_ip(request)
     except (ValueError, TypeError):
@@ -78,15 +88,23 @@ async def handle(request, operation):
     if len(keys) != 1 or not 1 <= len(keys[0]) <= 256:
         return response({"error": "Invalid widget key"}, 401)
     try:
-        body = await read_body(request, {"create": Create, "message": Message,
-                                         "history": History}[operation])
+        timeout = min(10, deadline - asyncio.get_running_loop().time()) if deadline else 10
+        body = await asyncio.wait_for(read_body(request, {"create": Create, "message": Message,
+                                         "history": History, "poll": Poll}[operation]), timeout)
     except web.HTTPRequestEntityTooLarge:
         return response({"error": "Request too large"}, 413)
     except (ValueError, TypeError, RecursionError):
         return response({"error": "Invalid session request"}, 400)
+    except TimeoutError:
+        return response({"error": "Session request timed out"}, 408)
     try:
-        widget = await request.app["key_manager"].validate_key_for_chat(keys[0])
-    except httpx.HTTPError:
+        lookup = request.app["key_manager"].validate_key_for_chat(keys[0])
+        if deadline:
+            widget = await asyncio.wait_for(lookup, max(0.001, deadline -
+                                           asyncio.get_running_loop().time()))
+        else:
+            widget = await lookup
+    except (httpx.HTTPError, TimeoutError):
         return response({"error": "Widget validation unavailable"}, 503)
     if widget is None:
         return response({"error": "Invalid widget key"}, 401)
@@ -104,6 +122,9 @@ async def handle(request, operation):
             return response({"error": "Session unavailable"}, 404)
         access = dict(scope.model_dump(), session_id=body.session_id,
                       session_token=SecretStr(tokens[0]))
+        if operation == "poll":
+            return await poll_transport.run(request, WebsiteSessionAccess(**access),
+                                             deadline=deadline)
         if operation == "message":
             await client.admit(WebsiteSessionAdmission(**access, message_id=body.message_id,
                                                        text=body.message))
@@ -126,3 +147,7 @@ async def message(request):
 
 async def history(request):
     return await handle(request, "history")
+
+
+async def poll(request):
+    return await handle(request, "poll")

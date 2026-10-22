@@ -11,7 +11,8 @@ from services.website_session_contracts import (
     WebsiteDeliveryBegin,
     WebsiteDeliveryComplete,
     WebsiteHistoryRequest,
-    WebsiteSessionAccess,
+    WebsitePollAccess,
+    WebsitePollBegin,
     WebsiteSessionAdmission,
     WebsiteSessionCreate,
 )
@@ -21,6 +22,47 @@ URL = "https://" + PEER
 SCOPE = dict(owner_id="owner", integration_id=str(uuid4()), agent_id=str(uuid4()), binding_generation=7)
 TOKEN = "a" * 43
 ACCESS = dict(SCOPE, session_id=str(uuid4()), session_token=TOKEN)
+POLL = dict(ACCESS, poll_id=str(uuid4()), supplier_instance_id=str(uuid4()),
+            process_incarnation_id=str(uuid4()))
+
+
+@pytest.mark.asyncio
+async def test_private_poll_resource_and_completion_have_separate_closed_identity():
+    seen = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        seen.append((request.url.path, body))
+        if request.url.path.endswith("/polls/begin"):
+            return httpx.Response(200, json=dict(state="ACQUIRED", poll_id=POLL["poll_id"],
+                                                deadline_at="2026-10-23T00:00:00Z"))
+        return httpx.Response(200, json={"replayed": False})
+
+    value = client(respond)
+    begin = WebsitePollBegin(**ACCESS, request_id=uuid4(),
+        supplier_instance_id=POLL["supplier_instance_id"],
+        process_incarnation_id=POLL["process_incarnation_id"])
+    assert str((await value.begin_poll(begin)).poll_id) == POLL["poll_id"]
+    assert not (await value.end_poll(WebsitePollAccess(**POLL))).replayed
+    await value.close()
+    assert [path.rsplit("/", 1)[-1] for path, _ in seen] == ["begin", "end"]
+    assert "poll_id" not in seen[0][1] and "request_id" not in seen[1][1]
+    assert seen[0][1]["session_token"] == seen[1][1]["session_token"] == TOKEN
+
+
+@pytest.mark.parametrize("body", [
+    {"state": "ACQUIRED", "poll_id": str(uuid4()), "deadline_at": None},
+    {"state": "RECOVER_ONLY", "poll_id": str(uuid4()), "deadline_at": None},
+    {"state": "ACQUIRED", "poll_id": str(uuid4()),
+     "deadline_at": "2026-10-23T00:00:00Z", "send": True},
+], ids=["missing-deadline", "replay-grant", "extra-authority"])
+@pytest.mark.asyncio
+async def test_poll_replay_or_malformed_grant_cannot_become_executable(body):
+    value = client(lambda _: httpx.Response(200, json=body))
+    with pytest.raises(WebsiteSessionError):
+        await value.begin_poll(WebsitePollBegin(**ACCESS, request_id=uuid4(),
+            supplier_instance_id=uuid4(), process_incarnation_id=uuid4()))
+    await value.close()
 
 
 def descriptor():
@@ -34,8 +76,7 @@ def recovery(item, status="UNKNOWN", writer="LIVE"):
 
 
 def begin_request(item, recover=False):
-    return WebsiteDeliveryBegin(**ACCESS, **item, supplier_instance_id=uuid4(),
-        process_incarnation_id=uuid4(), recover_only=recover)
+    return WebsiteDeliveryBegin(**POLL, **item, recover_only=recover)
 
 
 def client(respond):
@@ -132,7 +173,7 @@ async def test_error_statuses_are_bounded_and_redirects_never_forward_credential
 
     value = client(respond)
     with pytest.raises(WebsiteSessionError) as caught:
-        await value.work(WebsiteSessionAccess(**ACCESS))
+        await value.work(WebsitePollAccess(**POLL))
     await value.close()
     assert caught.value.status == expected and len(seen) == 1
     assert TOKEN not in str(caught.value) and TOKEN not in repr(caught.value)
@@ -143,7 +184,7 @@ async def test_unknown_original_recovery_contains_no_frame_and_keeps_identity():
     item = descriptor()
     body = dict(state="RECOVER_ONLY", item=item, recovery=recovery(item), frame=None)
     value = client(lambda _: httpx.Response(200, json=body))
-    result = await value.work(WebsiteSessionAccess(**ACCESS))
+    result = await value.work(WebsitePollAccess(**POLL))
     await value.close()
     assert result.frame is None and result.recovery.status == "UNKNOWN"
 
@@ -178,7 +219,8 @@ async def test_positive_acquisition_and_original_completion_match_closed_wire():
     value = client(respond)
     request = begin_request(item)
     assert (await value.begin(request)).send
-    completed = WebsiteDeliveryComplete(**request.model_dump(), outcome="WRITE_COMPLETED",
+    completed = WebsiteDeliveryComplete(**request.model_dump(exclude={"poll_id"}),
+        outcome="WRITE_COMPLETED",
         writer_end=dict(kind="TASK_JOINED", supplier_instance_id=request.supplier_instance_id,
                         process_incarnation_id=request.process_incarnation_id))
     result = await value.complete(completed)
@@ -213,7 +255,7 @@ async def test_closed_json_and_full_raw_metadata_bound(body):
     value = client(lambda _: httpx.Response(200, content=body,
                                            headers={"Content-Type": "application/json"}))
     with pytest.raises(WebsiteSessionError):
-        await value.work(WebsiteSessionAccess(**ACCESS))
+        await value.work(WebsitePollAccess(**POLL))
     await value.close()
 
 
