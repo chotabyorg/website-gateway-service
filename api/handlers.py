@@ -189,8 +189,10 @@ async def handle_config(request: web.Request) -> web.Response:
 
     key_manager = request.app["key_manager"]
     policy = request.app.get("public_session_policy")
+    cached_info = key_manager.validate_key(key)
     negotiated = (request.app.get("website_poll_transport") is not None
-                  and policy is not None and bool(policy.integrations))
+                  and policy is not None and bool(policy.integrations)
+                  and (cached_info is None or cached_info.integration_id in policy.integrations))
     if negotiated:
         try:
             widget_info = await key_manager.validate_key_for_chat(key)
@@ -198,7 +200,7 @@ async def handle_config(request: web.Request) -> web.Response:
             return web.json_response({"error": "Widget validation unavailable"}, status=503,
                                      headers={"Cache-Control": "no-store"})
     else:
-        widget_info = key_manager.validate_key(key)
+        widget_info = cached_info
     if widget_info is None:
         return web.json_response({"error": "Invalid widget key"}, status=404)
 

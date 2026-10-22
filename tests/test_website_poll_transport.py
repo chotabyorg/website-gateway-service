@@ -2,6 +2,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 import json
+import httpx
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -15,7 +16,7 @@ from api import website_sessions
 from api.handlers import handle_config
 from api.middleware import cors_middleware, safe_error_middleware
 from core.website_public_policy import WebsitePublicPolicy
-from services.control_plane_client import WidgetValidation
+from services.control_plane_client import IntegrationConfig, WidgetValidation
 from services.website_poll_transport import WebsitePollTransport
 from services.website_session_client import WebsiteSessionError
 from services.website_session_contracts import (
@@ -278,6 +279,34 @@ async def test_public_config_negotiates_only_enabled_current_common_protocol(pub
         "trusted-owner", {}, False, 7)
     result = await public_poll.client.get("/v1/config?key=wk_fixture")
     assert "session_transport" not in await result.json()
+
+
+@pytest.mark.asyncio
+async def test_unrelated_cached_widget_config_survives_control_plane_outage(public_poll):
+    public_poll.cp.fetch_integrations.return_value = [IntegrationConfig(
+        integration_id=str(uuid4()), agent_id=str(uuid4()), owner_id="other-owner",
+        credentials={"widget_api_key": "wk_other", "widget_config": {"window_title": "Other"}})]
+    await public_poll.app["key_manager"].reconcile()
+    public_poll.cp.validate_widget_key.side_effect = httpx.ConnectError("unavailable")
+    result = await public_poll.client.get("/v1/config?key=wk_other")
+    assert result.status == 200
+    assert (await result.json())["window_title"] == "Other"
+    assert "session_transport" not in await result.json()
+    public_poll.cp.validate_widget_key.assert_not_awaited()
+    assert result.headers["Cache-Control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_common_cached_widget_requires_fresh_validation_to_negotiate(public_poll):
+    public_poll.cp.fetch_integrations.return_value = [IntegrationConfig(
+        integration_id=INTEGRATION, agent_id=AGENT, owner_id="trusted-owner",
+        credentials={"widget_api_key": "wk_fixture"})]
+    await public_poll.app["key_manager"].reconcile()
+    public_poll.cp.validate_widget_key.side_effect = httpx.ConnectError("unavailable")
+    result = await public_poll.client.get("/v1/config?key=wk_fixture")
+    assert result.status == 503 and result.headers["Cache-Control"] == "no-store"
+    assert "session_transport" not in await result.json()
+    assert public_poll.cp.validate_widget_key.await_count == 1
 
 
 @pytest.mark.parametrize("extra", [{"poll_id": str(uuid4())}, {"supplier_instance_id": str(uuid4())},
