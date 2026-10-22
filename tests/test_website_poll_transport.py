@@ -12,6 +12,7 @@ import pytest
 import pytest_asyncio
 
 from api import website_sessions
+from api.handlers import handle_config
 from api.middleware import cors_middleware, safe_error_middleware
 from core.website_public_policy import WebsitePublicPolicy
 from services.control_plane_client import WidgetValidation
@@ -113,6 +114,7 @@ async def public_poll():
     app["key_manager"] = WidgetKeyManager(cp)
     app["website_session_client"], app["website_poll_transport"] = peer, transport
     app.router.add_post("/v1/sessions/poll", website_sessions.poll)
+    app.router.add_get("/v1/config", handle_config)
     async with TestClient(TestServer(app)) as client:
         yield SimpleNamespace(client=client, peer=peer, app=app, transport=transport, cp=cp)
 
@@ -261,6 +263,21 @@ async def test_poll_default_off_precedes_body_tls_and_credentials(public_poll):
     result = await public_poll.client.post("/v1/sessions/poll", data=b"bad-json")
     assert result.status == 404 and public_poll.peer.calls == []
     assert not public_poll.cp.mock_calls
+
+
+@pytest.mark.asyncio
+async def test_public_config_negotiates_only_enabled_current_common_protocol(public_poll):
+    result = await public_poll.client.get("/v1/config?key=wk_fixture")
+    body = await result.json()
+    assert body["session_transport"] == "credential-v1"
+    assert "owner_id" not in body and "binding_generation" not in body
+    assert "session_token" not in body and "integration_id" not in body
+    assert result.headers["Cache-Control"] == "no-store"
+    assert public_poll.cp.validate_widget_key.await_count == 1
+    public_poll.cp.validate_widget_key.return_value = WidgetValidation(INTEGRATION, AGENT,
+        "trusted-owner", {}, False, 7)
+    result = await public_poll.client.get("/v1/config?key=wk_fixture")
+    assert "session_transport" not in await result.json()
 
 
 @pytest.mark.parametrize("extra", [{"poll_id": str(uuid4())}, {"supplier_instance_id": str(uuid4())},

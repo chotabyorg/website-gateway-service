@@ -188,16 +188,31 @@ async def handle_config(request: web.Request) -> web.Response:
         return web.json_response({"error": "Missing key parameter"}, status=400)
 
     key_manager = request.app["key_manager"]
-    widget_info = key_manager.validate_key(key)
+    policy = request.app.get("public_session_policy")
+    negotiated = (request.app.get("website_poll_transport") is not None
+                  and policy is not None and bool(policy.integrations))
+    if negotiated:
+        try:
+            widget_info = await key_manager.validate_key_for_chat(key)
+        except httpx.HTTPError:
+            return web.json_response({"error": "Widget validation unavailable"}, status=503,
+                                     headers={"Cache-Control": "no-store"})
+    else:
+        widget_info = key_manager.validate_key(key)
     if widget_info is None:
         return web.json_response({"error": "Invalid widget key"}, status=404)
 
-    return web.json_response({
+    appearance = {
         "primary_color": widget_info.config.get("primary_color", "#6C5CE7"),
         "position": widget_info.config.get("position", "bottom-right"),
         "welcome_message": widget_info.config.get("welcome_message", "Привет! Чем могу помочь?"),
         "window_title": widget_info.config.get("window_title", "Чат с ассистентом"),
-    })
+    }
+    if (negotiated and widget_info.conversation_required
+            and policy.integrations.get(widget_info.integration_id) == widget_info.agent_id):
+        # Public protocol choice only: no owner, binding generation or capability.
+        appearance["session_transport"] = "credential-v1"
+    return web.json_response(appearance, headers={"Cache-Control": "no-store"})
 
 
 async def handle_health(request: web.Request) -> web.Response:
