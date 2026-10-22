@@ -42,6 +42,7 @@ class Peer:
                                        text="owner fixture")
         self.work_state, self.decision = "SEND_CANDIDATE", "ACQUIRED"
         self.begin_error, self.poll_error = None, None
+        self.poll_state = "ACQUIRED"
         self.begin_entered = asyncio.Event()
         self.begin_release = None
         self.end_entered, self.end_done = asyncio.Event(), asyncio.Event()
@@ -55,6 +56,8 @@ class Peer:
         self.calls.append(("begin_poll", command))
         if self.poll_error:
             raise self.poll_error
+        if self.poll_state == "RECOVER_ONLY":
+            return WebsitePollStarted(state="RECOVER_ONLY")
         return WebsitePollStarted(state="ACQUIRED", poll_id=uuid4(),
                                   deadline_at=datetime.now(timezone.utc) + timedelta(seconds=20))
 
@@ -204,6 +207,30 @@ async def test_durable_poll_rate_denial_does_not_read_or_acquire_work(public_pol
 
 
 @pytest.mark.asyncio
+async def test_non_executable_poll_replay_never_reads_work_or_ends_someone_elses_poll(public_poll):
+    public_poll.peer.poll_state = "RECOVER_ONLY"
+    result = await poll(public_poll)
+    assert await result.json() == {"state": "RECOVER_ONLY"}
+    assert [name for name, _ in public_poll.peer.calls] == ["begin_poll"]
+
+
+@pytest.mark.asyncio
+async def test_completed_socket_is_not_resent_when_private_completion_reply_is_lost(public_poll):
+    commands = []
+
+    async def complete(command):
+        commands.append(command)
+        raise WebsiteSessionError()
+
+    public_poll.peer.complete = complete
+    result = await poll(public_poll)
+    assert (await result.json())["state"] == "DELIVERY"
+    await public_poll.peer.end_done.wait()
+    assert len(commands) == 1 and commands[0].outcome == "WRITE_COMPLETED"
+    assert [name for name, _ in public_poll.peer.calls].count("begin") == 1
+
+
+@pytest.mark.asyncio
 async def test_empty_poll_is_bounded_and_does_not_end_any_writer(public_poll):
     public_poll.peer.work_state = "EMPTY"
     started = asyncio.get_running_loop().time()
@@ -339,3 +366,23 @@ def test_restart_uses_new_identity_and_never_synthesizes_predecessor_join():
 def test_public_poll_cannot_extend_the_twenty_second_bound(seconds):
     with pytest.raises(ValueError):
         WebsitePollTransport(Peer(), wait_seconds=seconds)
+
+
+def test_poll_configuration_defaults_off_and_requires_valid_common_cohort(load_module):
+    from pydantic import ValidationError
+    config = load_module("core.config")
+    assert config.settings.COMMON_WEBSITE_POLL_ENABLED is False
+    with pytest.raises(ValidationError):
+        config.Settings(_env_file=None, COMMON_WEBSITE_POLL_ENABLED=True)
+    for seconds in (0, 20.01, float("nan"), float("inf")):
+        with pytest.raises(ValidationError):
+            config.Settings(_env_file=None, COMMON_WEBSITE_POLL_WAIT_SECONDS=seconds)
+    common = json.dumps({INTEGRATION: AGENT})
+    selected = config.Settings(_env_file=None, COMMON_WEBSITE_INTEGRATIONS=common,
+        MANAGED_WEBSITE_GUARDED_INTEGRATIONS=common,
+        CONVERSATION_SERVICE_URL="http://old-conversation", CONVERSATION_S2S_TOKEN="fake-v2",
+        COMMON_WEBSITE_CONVERSATION_URL="https://conversation.internal.example",
+        COMMON_WEBSITE_CONVERSATION_PEER="conversation.internal.example",
+        COMMON_WEBSITE_S2S_TOKEN="fake-private", COMMON_WEBSITE_POLL_ENABLED=True,
+        COMMON_WEBSITE_POLL_WAIT_SECONDS=0.1)
+    assert selected.COMMON_WEBSITE_POLL_WAIT_SECONDS == 0.1
