@@ -126,6 +126,8 @@ async def handle(request, operation):
             return await poll_transport.run(request, WebsiteSessionAccess(**access),
                                              deadline=deadline)
         if operation == "message":
+            if not policy.admits_message(widget.integration_id, str(body.session_id)):
+                return response({"error": "Session unavailable"}, 404)
             await client.admit(WebsiteSessionAdmission(**access, message_id=body.message_id,
                                                        text=body.message))
             return response({"message_id": str(body.message_id), "status": "ACCEPTED"}, 202)
