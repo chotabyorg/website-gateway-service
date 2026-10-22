@@ -337,6 +337,32 @@ that private response. The private client requires
 `COMMON_WEBSITE_CONVERSATION_PEER`, optional trusted CA file and dedicated
 `COMMON_WEBSITE_S2S_TOKEN`. It never retries a private operation automatically.
 
+`COMMON_WEBSITE_MESSAGE_SESSION_ALLOWLIST` is a separate new-message admission
+fence, with explicit empty default `{}`. It maps selected common integration UUIDs
+to lists of canonical server-issued session UUIDs, for example
+`{"<integration UUID>":["<server-issued session UUID>"]}`. Until a reviewed session
+is selected, even a valid session capability cannot admit CUSTOMER input through
+`POST /v1/sessions/messages`: the gateway returns bounded `404 Session unavailable`
+with `Cache-Control: no-store`, without calling private admission or legacy AI.
+The limit is 200000 JSON characters, 64 integrations and 64 distinct sessions per
+integration. Duplicate keys/sessions, wildcard or noncanonical UUIDs, unknown
+integration keys, non-list values and broad modes such as `INTEGRATION_ALL` fail
+startup. An empty list selects no sessions. This setting does not use the legacy
+`MANAGED_WEBSITE_COHORTS` policy.
+
+Selection uses the exact integration from fresh Control Plane validation and the
+request's server session UUID after token-format validation. It never replaces
+the private capability, binding, current common grant or AI lifecycle checks.
+Create a genuine fresh session through `POST /v1/sessions` under the active grant,
+then select its UUID through reviewed runtime configuration; never select a
+client-generated visitor ID. The configuration is read at startup, so changes
+require the normal reviewed process rollout. Creation, authenticated own history
+and idle poll retain their existing gates and do not require message selection.
+Removing a session blocks subsequent input on processes using the new config;
+it does not cancel an admitted Turn, revoke authority or terminate its writer.
+Use the existing CP lifecycle for authority revocation, and retain all legacy
+guards/drains through rollback. Source publication alone enrolls no session.
+
 Public HTTPS is required before reading a body or sending credentials to Control
 Plane. Direct TLS uses the actual TCP peer IP. With explicitly configured
 `COMMON_WEBSITE_TRUSTED_PROXY_CIDRS` (up to 16 exact networks, no `/0`), only that

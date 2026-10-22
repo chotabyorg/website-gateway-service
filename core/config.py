@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     CONVERSATION_RESULT_POLL_INITIAL_SECONDS: float = 0.1
 
     COMMON_WEBSITE_INTEGRATIONS: str = "{}"
+    COMMON_WEBSITE_MESSAGE_SESSION_ALLOWLIST: str = "{}"
     COMMON_WEBSITE_TRUSTED_PROXY_CIDRS: str = ""
     COMMON_WEBSITE_CONVERSATION_URL: str = ""
     COMMON_WEBSITE_CONVERSATION_PEER: str = ""
@@ -69,7 +70,8 @@ class Settings(BaseSettings):
 
     def public_session_policy(self) -> WebsitePublicPolicy:
         return WebsitePublicPolicy.parse(self.COMMON_WEBSITE_INTEGRATIONS,
-                                         self.COMMON_WEBSITE_TRUSTED_PROXY_CIDRS)
+                                         self.COMMON_WEBSITE_TRUSTED_PROXY_CIDRS,
+                                         self.COMMON_WEBSITE_MESSAGE_SESSION_ALLOWLIST)
 
 
 def load_settings() -> Settings:

@@ -26,20 +26,23 @@ HEADERS = {"X-Widget-Key": "wk_fixture", "X-Forwarded-Proto": "https",
 
 @pytest_asyncio.fixture
 async def public():
-    calls, state = [], {"status": 200, "items": []}
+    calls, state = [], {"status": 200, "items": [], "session_id": SESSION}
 
     def respond(request):
         calls.append((request, json.loads(request.content)))
         if state["status"] != 200:
             return httpx.Response(state["status"], json={"secret": "private-error"},
                                   headers={"Retry-After": "12"})
+        if ("session_token" in calls[-1][1]
+                and calls[-1][1]["session_token"] != TOKEN):
+            return httpx.Response(404, json={"secret": "private-auth-denial"})
         if request.url.path.endswith("/admissions"):
             payload = {"route": "MANAGED", "admission_id": str(uuid4()), "replayed": False}
         elif request.url.path.endswith("/history"):
             payload = {"state": "PAGE", "items": state["items"], "next_cursor": None,
                        "oversized_message_id": None}
         else:
-            return httpx.Response(201, json={"session_id": SESSION, "session_token": TOKEN,
+            return httpx.Response(201, json={"session_id": state["session_id"], "session_token": TOKEN,
                                             "expires_at": "2026-10-23T00:00:00Z"})
         return httpx.Response(200, json=payload)
 
@@ -71,6 +74,7 @@ async def test_create_message_history_use_server_identity_and_private_json(publi
     assert created.status == 201
     assert (await created.json())["session_token"] == TOKEN
     assert created.headers["Cache-Control"] == "no-store"
+    select_message_sessions(public, {INTEGRATION: [SESSION]})
     message_id = str(uuid4())
     for _ in range(2):
         admitted = await public.client.post("/v1/sessions/messages", headers=HEADERS,
@@ -93,6 +97,104 @@ async def test_create_message_history_use_server_identity_and_private_json(publi
         assert payload["owner_id"] == "trusted-owner" and payload["binding_generation"] == 7
     assert public.calls[1][1]["message_id"] == public.calls[2][1]["message_id"] == message_id
     assert public.calls[-1][1]["session_token"] == TOKEN
+
+
+def select_message_sessions(public, sessions, integrations=None):
+    public.app["public_session_policy"] = WebsitePublicPolicy.parse(
+        json.dumps(integrations or {INTEGRATION: AGENT}), "127.0.0.1/32",
+        json.dumps(sessions))
+
+
+async def send_message(public, session=SESSION, headers=None):
+    return await public.client.post("/v1/sessions/messages", headers=headers or HEADERS,
+        json={"session_id": session, "message_id": str(uuid4()), "message": "fixture"})
+
+
+@pytest.mark.asyncio
+async def test_default_empty_allowlist_denies_valid_capability_without_private_admission(public):
+    created = await public.client.post("/v1/sessions", json={}, headers=HEADERS)
+    assert created.status == 201
+    session = (await created.json())["session_id"]
+    public.calls.clear()
+    result = await send_message(public, session)
+    assert result.status == 404
+    assert await result.json() == {"error": "Session unavailable"}
+    assert result.headers["Cache-Control"] == "no-store"
+    assert public.cp.validate_widget_key.await_count == 2
+    assert public.calls == []
+    history = await public.client.post("/v1/sessions/history", headers=HEADERS,
+                                       json={"session_id": session})
+    assert history.status == 200
+    assert len(public.calls) == 1 and public.calls[0][0].url.path.endswith("/history")
+
+
+@pytest.mark.asyncio
+async def test_only_selected_server_session_can_admit_and_removal_stops_new_input(public):
+    created = await public.client.post("/v1/sessions", json={}, headers=HEADERS)
+    selected = (await created.json())["session_id"]
+    public.state["session_id"] = str(uuid4())
+    other = await public.client.post("/v1/sessions", json={}, headers=HEADERS)
+    other_session = (await other.json())["session_id"]
+    assert other_session != selected
+    select_message_sessions(public, {INTEGRATION: [selected]})
+    public.calls.clear()
+    assert (await send_message(public, selected)).status == 202
+    assert (await send_message(public, other_session)).status == 404
+    assert len(public.calls) == 1
+    select_message_sessions(public, {})
+    stopped = await send_message(public, selected)
+    assert stopped.status == 404 and stopped.headers["Cache-Control"] == "no-store"
+    assert len(public.calls) == 1
+    # The fence does not revoke an existing capability or its own history.
+    history = await public.client.post("/v1/sessions/history", headers=HEADERS,
+                                       json={"session_id": selected})
+    assert history.status == 200
+    assert len(public.calls) == 2 and public.calls[-1][0].url.path.endswith("/history")
+
+
+@pytest.mark.asyncio
+async def test_allowlisted_session_does_not_cross_fresh_cp_integration(public):
+    other_integration = str(uuid4())
+    select_message_sessions(public, {INTEGRATION: [SESSION]},
+                            {INTEGRATION: AGENT, other_integration: AGENT})
+    public.cp.validate_widget_key.return_value = WidgetValidation(other_integration, AGENT,
+        "trusted-owner", {}, True, 7)
+    result = await send_message(public)
+    assert result.status == 404 and not public.calls
+    assert public.cp.validate_widget_key.await_count == 1
+
+
+@pytest.mark.parametrize("token", ["", "bad", "b" * 43])
+@pytest.mark.asyncio
+async def test_allowlist_does_not_replace_capability_authentication(public, token):
+    select_message_sessions(public, {INTEGRATION: [SESSION]})
+    result = await send_message(public, headers={**HEADERS, "X-Widget-Session-Token": token})
+    assert result.status == 404
+    assert await result.json() == {"error": "Session unavailable"}
+    assert result.headers["Cache-Control"] == "no-store"
+    assert len(public.calls) == (1 if len(token) == 43 else 0)
+    if public.calls:
+        assert public.calls[0][1]["session_token"] == token
+
+
+@pytest.mark.parametrize("required,agent", [(False, AGENT), (True, str(uuid4()))])
+@pytest.mark.asyncio
+async def test_allowlist_does_not_replace_fresh_cp_scope(public, required, agent):
+    select_message_sessions(public, {INTEGRATION: [SESSION]})
+    public.cp.validate_widget_key.return_value = WidgetValidation(INTEGRATION, agent,
+        "trusted-owner", {}, required, 7)
+    result = await send_message(public)
+    assert result.status == 503 and not public.calls
+
+
+@pytest.mark.asyncio
+async def test_allowlist_preserves_private_current_grant_denial(public):
+    select_message_sessions(public, {INTEGRATION: [SESSION]})
+    public.state["status"] = 409
+    result = await send_message(public)
+    assert result.status == 409 and len(public.calls) == 1
+    assert await result.json() == {"error": "Session unavailable"}
+    assert result.headers["Cache-Control"] == "no-store"
 
 
 @pytest.mark.parametrize("path,payload", [
