@@ -205,6 +205,7 @@ async def test_durable_poll_rate_denial_does_not_read_or_acquire_work(public_pol
     public_poll.peer.poll_error = WebsiteSessionError(429, 17)
     result = await poll(public_poll)
     assert result.status == 429 and result.headers["Retry-After"] == "17"
+    assert result.headers["Access-Control-Expose-Headers"] == "Retry-After"
     assert await result.json() == {"error": "Session unavailable"}
     assert [name for name, _ in public_poll.peer.calls] == ["begin_poll"]
 

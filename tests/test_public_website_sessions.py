@@ -176,6 +176,7 @@ async def test_private_failures_are_bounded_and_preserve_rate_limit(public, stat
     assert result.headers["Cache-Control"] == "no-store"
     if status == 429:
         assert result.headers["Retry-After"] == "12"
+        assert result.headers["Access-Control-Expose-Headers"] == "Retry-After"
     assert len(public.calls) == 1
 
 
