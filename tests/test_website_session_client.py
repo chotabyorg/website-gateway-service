@@ -13,7 +13,7 @@ from services.website_session_contracts import (
     WebsiteHistoryRequest,
     WebsiteSessionAccess,
     WebsiteSessionAdmission,
-    WebsiteSessionScope,
+    WebsiteSessionCreate,
 )
 
 PEER = "conversation.internal.example"
@@ -80,11 +80,11 @@ async def test_create_is_new_identity_without_visitor_input_and_hides_secret_rep
                                              expires_at="2026-10-23T00:00:00Z"))
 
     value = client(respond)
-    created = await value.create(WebsiteSessionScope(**SCOPE))
+    created = await value.create(WebsiteSessionCreate(**SCOPE, client_ip="192.0.2.1"))
     await value.close()
     assert TOKEN not in repr(created)
     assert created.session_token.get_secret_value() == TOKEN
-    assert json.loads(seen[0].content) == SCOPE
+    assert json.loads(seen[0].content) == dict(SCOPE, client_ip="192.0.2.1")
     assert seen[0].url.path == "/internal/v1/website/sessions"
 
 

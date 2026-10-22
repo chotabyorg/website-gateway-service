@@ -6,22 +6,29 @@ from aiohttp import web
 
 from api.handlers import handle_chat, handle_config, handle_health, handle_root
 from api.middleware import cors_middleware, safe_error_middleware
+from api import website_sessions
 from core.logger import log_event, setup_logging
 from core.config import settings
 from services.control_plane_client import ControlPlaneClient
 from services.core_api import CoreAPIClient
 from services.conversation_client import ConversationClient
 from services.widget_key_manager import WidgetKeyManager
+from services.website_session_client import WebsiteSessionClient
 
 
-def create_app(key_manager, core_api, conversation=None) -> web.Application:
+def create_app(key_manager, core_api, conversation=None, common_sessions=None) -> web.Application:
     app = web.Application(middlewares=[safe_error_middleware, cors_middleware])
     app["key_manager"] = key_manager
     app["core_api"] = core_api
     app["conversation_client"] = conversation
     app["routing_policy"] = settings.routing_policy()
     app["transport_timeout"] = settings.CONVERSATION_REQUEST_TIMEOUT_SECONDS
+    app["public_session_policy"] = settings.public_session_policy()
+    app["website_session_client"] = common_sessions
     app.router.add_post("/v1/chat", handle_chat)
+    app.router.add_post("/v1/sessions", website_sessions.create)
+    app.router.add_post("/v1/sessions/messages", website_sessions.message)
+    app.router.add_post("/v1/sessions/history", website_sessions.history)
     app.router.add_get("/v1/config", handle_config)
     app.router.add_get("/health", handle_health)
     app.router.add_get("/", handle_root)
@@ -52,11 +59,18 @@ async def main() -> None:
             poll_interval=settings.CONVERSATION_RESULT_POLL_SECONDS,
             poll_initial=settings.CONVERSATION_RESULT_POLL_INITIAL_SECONDS,
         )
+    common_sessions = None
+    if settings.public_session_policy().integrations:
+        common_sessions = WebsiteSessionClient(settings.COMMON_WEBSITE_CONVERSATION_URL,
+            settings.COMMON_WEBSITE_S2S_TOKEN.get_secret_value(),
+            expected_peer=settings.COMMON_WEBSITE_CONVERSATION_PEER,
+            trusted_ca_file=settings.COMMON_WEBSITE_CONVERSATION_CA_FILE,
+            request_timeout=settings.CONVERSATION_REQUEST_TIMEOUT_SECONDS)
     await key_manager.reconcile()
     if key_manager.active_count() == 0:
         log_event(logging.WARNING, "no_active_widgets")
 
-    app = create_app(key_manager, core_api, conversation)
+    app = create_app(key_manager, core_api, conversation, common_sessions)
     runner = create_runner(app)
 
     async def reconcile_loop() -> None:
@@ -84,6 +98,8 @@ async def main() -> None:
         await cp_client.close()
         if conversation is not None:
             await conversation.close()
+        if common_sessions is not None:
+            await common_sessions.close()
         log_event(logging.INFO, "gateway_stopped")
 
 

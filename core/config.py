@@ -2,6 +2,7 @@ from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from core.routing import RoutingPolicy
+from core.website_public_policy import WebsitePublicPolicy
 
 
 class Settings(BaseSettings):
@@ -23,6 +24,13 @@ class Settings(BaseSettings):
     CONVERSATION_RESULT_POLL_SECONDS: float = 0.5
     CONVERSATION_RESULT_POLL_INITIAL_SECONDS: float = 0.1
 
+    COMMON_WEBSITE_INTEGRATIONS: str = "{}"
+    COMMON_WEBSITE_TRUSTED_PROXY_CIDRS: str = ""
+    COMMON_WEBSITE_CONVERSATION_URL: str = ""
+    COMMON_WEBSITE_CONVERSATION_PEER: str = ""
+    COMMON_WEBSITE_CONVERSATION_CA_FILE: str | None = None
+    COMMON_WEBSITE_S2S_TOKEN: SecretStr = SecretStr("")
+
     HOST: str = "0.0.0.0"
     PORT: int = 8080
     ALLOWED_ORIGINS: str = "*"
@@ -31,6 +39,14 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def check_managed_configuration(self):
         policy = self.routing_policy()
+        common = self.public_session_policy()
+        if common.integrations:
+            if (not self.COMMON_WEBSITE_CONVERSATION_URL
+                    or not self.COMMON_WEBSITE_CONVERSATION_PEER
+                    or not self.COMMON_WEBSITE_S2S_TOKEN.get_secret_value()
+                    or any(policy.guards.get(key) != agent
+                           for key, agent in common.integrations.items())):
+                raise ValueError("invalid_common_website_configuration")
         if policy.guards and (not self.CONVERSATION_SERVICE_URL or not self.CONVERSATION_S2S_TOKEN.get_secret_value()):
             raise ValueError("guard_requires_conversation_configuration")
         if not 0.1 <= self.CONVERSATION_REQUEST_TIMEOUT_SECONDS <= 30:
@@ -45,6 +61,10 @@ class Settings(BaseSettings):
 
     def routing_policy(self) -> RoutingPolicy:
         return RoutingPolicy.parse(self.MANAGED_WEBSITE_GUARDED_INTEGRATIONS, self.MANAGED_WEBSITE_COHORTS)
+
+    def public_session_policy(self) -> WebsitePublicPolicy:
+        return WebsitePublicPolicy.parse(self.COMMON_WEBSITE_INTEGRATIONS,
+                                         self.COMMON_WEBSITE_TRUSTED_PROXY_CIDRS)
 
 
 def load_settings() -> Settings:
