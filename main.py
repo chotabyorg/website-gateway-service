@@ -14,6 +14,7 @@ from services.core_api import CoreAPIClient
 from services.conversation_client import ConversationClient
 from services.widget_key_manager import WidgetKeyManager
 from services.website_session_client import WebsiteSessionClient
+from services.website_poll_transport import WebsitePollTransport
 
 
 def create_app(key_manager, core_api, conversation=None, common_sessions=None) -> web.Application:
@@ -25,10 +26,15 @@ def create_app(key_manager, core_api, conversation=None, common_sessions=None) -
     app["transport_timeout"] = settings.CONVERSATION_REQUEST_TIMEOUT_SECONDS
     app["public_session_policy"] = settings.public_session_policy()
     app["website_session_client"] = common_sessions
+    app["website_poll_transport"] = (WebsitePollTransport(common_sessions,
+        wait_seconds=settings.COMMON_WEBSITE_POLL_WAIT_SECONDS,
+        call_timeout=settings.CONVERSATION_REQUEST_TIMEOUT_SECONDS)
+        if settings.COMMON_WEBSITE_POLL_ENABLED and common_sessions is not None else None)
     app.router.add_post("/v1/chat", handle_chat)
     app.router.add_post("/v1/sessions", website_sessions.create)
     app.router.add_post("/v1/sessions/messages", website_sessions.message)
     app.router.add_post("/v1/sessions/history", website_sessions.history)
+    app.router.add_post("/v1/sessions/poll", website_sessions.poll)
     app.router.add_get("/v1/config", handle_config)
     app.router.add_get("/health", handle_health)
     app.router.add_get("/", handle_root)

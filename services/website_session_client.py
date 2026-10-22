@@ -20,6 +20,10 @@ from services.website_session_contracts import (
     WebsiteDeliveryWorkResult,
     WebsiteHistoryPage,
     WebsiteHistoryRequest,
+    WebsitePollAccess,
+    WebsitePollBegin,
+    WebsitePollEnded,
+    WebsitePollStarted,
     WebsiteSessionAccess,
     WebsiteSessionAdmission,
     WebsiteSessionCreated,
@@ -114,7 +118,13 @@ class WebsiteSessionClient:
     async def history(self, request: WebsiteHistoryRequest) -> WebsiteHistoryPage:
         return await self._post("/history", request, WebsiteHistoryPage, 262144)
 
-    async def work(self, request: WebsiteSessionAccess) -> WebsiteDeliveryWorkResult:
+    async def begin_poll(self, request: WebsitePollBegin) -> WebsitePollStarted:
+        return await self._post("/polls/begin", request, WebsitePollStarted, 4096)
+
+    async def end_poll(self, request: WebsitePollAccess) -> WebsitePollEnded:
+        return await self._post("/polls/end", request, WebsitePollEnded, 4096)
+
+    async def work(self, request: WebsitePollAccess) -> WebsiteDeliveryWorkResult:
         value = await self._post("/delivery/work", request, WebsiteDeliveryWorkResult)
         if value.item is not None:
             if ((value.frame is not None and value.frame.delivery_id != value.item.delivery_id)
