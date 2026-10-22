@@ -320,6 +320,41 @@ cancellation.
 
 ## Credential-safe diagnostics
 
+## Common credential session transport (default off)
+
+`POST /v1/sessions` accepts an empty JSON object and issues a fresh session/token.
+`POST /v1/sessions/messages` accepts only `session_id`, `message_id`, `message` and
+returns a bounded `202` admission receipt using the caller's message UUID.
+`POST /v1/sessions/history` accepts only `session_id` and optional opaque `cursor`;
+the response is Conversation's visitor projection, bounded to 50 items/262144
+serialized UTF-8 bytes. All responses use `Cache-Control: no-store`. Access uses
+`X-Widget-Key` and `X-Widget-Session-Token`; raw tokens are forwarded only in the
+verified private JSON body, never in query URLs or private request headers.
+
+`COMMON_WEBSITE_INTEGRATIONS` is an explicit integration→agent JSON map, empty by
+default, and must match the existing pinned guards. Every operation revalidates
+the Widget key with Control Plane and derives owner/agent/current binding from
+that private response. The private client requires
+`COMMON_WEBSITE_CONVERSATION_URL` (HTTPS), exact
+`COMMON_WEBSITE_CONVERSATION_PEER`, optional trusted CA file and dedicated
+`COMMON_WEBSITE_S2S_TOKEN`. It never retries a private operation automatically.
+
+Public HTTPS is required before reading a body or sending credentials to Control
+Plane. Direct TLS uses the actual TCP peer IP. With explicitly configured
+`COMMON_WEBSITE_TRUSTED_PROXY_CIDRS` (up to 16 exact networks, no `/0`), only that
+TCP peer may assert a single `X-Forwarded-Proto: https` and single valid `X-Real-IP`.
+Untrusted forwarding, duplicate headers and arbitrary `X-Forwarded-For` do not
+provide trust. Creation forwards this derived client IP to Conversation's durable
+rate admission; raw IP is not a session identity. Closed bodies are limited to
+65536 UTF-8 JSON bytes, including escaping; errors expose no private payload.
+
+Do not activate this cohort yet. Idle polling/socket ownership, positive legacy
+writer retirement, trusted production writer proof, deployed TLS/privacy checks,
+owner Inbox and Widget integration remain acceptance gates. This source change
+does not modify production cohorts, provision visitors or establish hosted E2E.
+
+## Credential-safe diagnostics
+
 Chat validation requires the private Control Plane `conversation_required` boolean
 and positive integer `binding_generation`. Missing or malformed fields return a
 bounded 503. Deploy the compatible Control Plane reader first. A retained
