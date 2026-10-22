@@ -23,6 +23,8 @@ class WidgetValidation:
     agent_id: str
     owner_id: str
     config: dict
+    conversation_required: bool = False
+    binding_generation: int = 1
 
 
 class ControlPlaneClient:
@@ -72,13 +74,23 @@ class ControlPlaneClient:
             log_event(logging.ERROR, "widget_validation_unavailable", exc=exc)
             raise
 
-        item = response.json()
-        return WidgetValidation(
-            integration_id=item["integration_id"],
-            agent_id=item["agent_id"],
-            owner_id=item["owner_id"],
-            config=item.get("config", {}),
-        )
+        try:
+            item = response.json()
+            required = item["conversation_required"]
+            generation = item["binding_generation"]
+            if (type(required) is not bool or type(generation) is not int
+                    or generation < 1):
+                raise ValueError("invalid_routing_fence")
+            return WidgetValidation(
+                integration_id=item["integration_id"],
+                agent_id=item["agent_id"],
+                owner_id=item["owner_id"],
+                config=item.get("config", {}),
+                conversation_required=required,
+                binding_generation=generation,
+            )
+        except (ValueError, TypeError, KeyError):
+            raise httpx.HTTPError("Widget validation unavailable") from None
 
     async def close(self) -> None:
         await self.client.aclose()
