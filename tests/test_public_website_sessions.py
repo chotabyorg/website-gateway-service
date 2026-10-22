@@ -148,7 +148,8 @@ async def test_untrusted_http_forwarding_cannot_assert_https(public):
     (b'{"session_id":"x","session_id":"y"}', 400),
     (b'{"unknown":"' + b'a' * 65536 + b'"}', 413),
     (b'[]', 400), (b'null', 400), (b'\xff', 400),
-], ids=["duplicate", "oversize", "array", "null", "non-utf8"])
+    (b'[' * 4000 + b']' * 4000, 400),
+], ids=["duplicate", "oversize", "array", "null", "non-utf8", "nested"])
 @pytest.mark.asyncio
 async def test_bounded_public_json_before_private_io(public, body, status):
     result = await public.client.post("/v1/sessions", data=body,

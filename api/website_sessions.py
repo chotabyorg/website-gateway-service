@@ -82,7 +82,7 @@ async def handle(request, operation):
                                          "history": History}[operation])
     except web.HTTPRequestEntityTooLarge:
         return response({"error": "Request too large"}, 413)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return response({"error": "Invalid session request"}, 400)
     try:
         widget = await request.app["key_manager"].validate_key_for_chat(keys[0])
