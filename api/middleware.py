@@ -6,7 +6,7 @@ from core.logger import log_event
 
 _CORS_HEADERS = {
     "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, X-Widget-Key",
+    "Access-Control-Allow-Headers": "Content-Type, X-Widget-Key, X-Widget-Session-Token",
     "Access-Control-Max-Age": "3600",
 }
 

@@ -23,7 +23,7 @@ from services.website_session_contracts import (
     WebsiteSessionAccess,
     WebsiteSessionAdmission,
     WebsiteSessionCreated,
-    WebsiteSessionScope,
+    WebsiteSessionCreate,
 )
 
 Result = TypeVar("Result", bound=Contract)
@@ -102,7 +102,7 @@ class WebsiteSessionClient:
             # automatic retry. A lost begin reply is unresolved original authority.
             raise WebsiteSessionError() from None
 
-    async def create(self, request: WebsiteSessionScope) -> WebsiteSessionCreated:
+    async def create(self, request: WebsiteSessionCreate) -> WebsiteSessionCreated:
         value = await self._post("", request, WebsiteSessionCreated, 4096)
         if re.fullmatch(r"[A-Za-z0-9_-]{43}", value.session_token.get_secret_value()) is None:
             raise WebsiteSessionError()

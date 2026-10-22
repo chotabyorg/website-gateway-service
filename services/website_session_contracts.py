@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 import unicodedata
 from uuid import UUID
 
-from pydantic import (BaseModel, BeforeValidator, ConfigDict, Field, SecretStr,
+from pydantic import (BaseModel, BeforeValidator, ConfigDict, Field, IPvAnyAddress, SecretStr,
                       StrictBool, field_serializer, model_validator)
 
 
@@ -41,6 +41,10 @@ class WebsiteSessionScope(Contract):
     integration_id: UUID
     agent_id: UUID
     binding_generation: PositiveCounter
+
+
+class WebsiteSessionCreate(WebsiteSessionScope):
+    client_ip: IPvAnyAddress = Field(repr=False)
 
 
 class WebsiteSessionCreated(Contract):
