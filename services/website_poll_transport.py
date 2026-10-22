@@ -90,8 +90,8 @@ class WebsitePollTransport:
 
     async def run(self, request, access: WebsiteSessionAccess, *, deadline=None):
         attested = self.attestor.required({**access.model_dump(mode="json"), "channel": "WEBSITE_WIDGET"})
-        if attested:
-            self.supplier_instance_id, self.process_incarnation_id = self.attestor.identity()
+        supplier_id, process_id = (self.attestor.identity() if attested else
+                                   (self.supplier_instance_id, self.process_incarnation_id))
         loop = asyncio.get_running_loop()
         deadline = min(deadline or loop.time() + self.wait_seconds,
                        loop.time() + self.wait_seconds)
@@ -136,14 +136,14 @@ class WebsitePollTransport:
             # returned. No detached callback/future can subsequently write text.
             command = WebsiteDeliveryComplete(**begin.model_dump(exclude={"poll_id"}),
                 outcome=outcome, error_code=error_code, writer_end={"kind": "TASK_JOINED",
-                    "supplier_instance_id": self.supplier_instance_id,
-                    "process_incarnation_id": self.process_incarnation_id})
+                    "supplier_instance_id": begin.supplier_instance_id,
+                    "process_incarnation_id": begin.process_incarnation_id})
             return await joined(self.client.complete(command), self.cleanup_timeout)
 
         try:
             granted = await joined(self.client.begin_poll(WebsitePollBegin(**access.model_dump(),
-                request_id=uuid4(), supplier_instance_id=self.supplier_instance_id,
-                process_incarnation_id=self.process_incarnation_id)),
+                request_id=uuid4(), supplier_instance_id=supplier_id,
+                process_incarnation_id=process_id)),
                 min(self.call_timeout, max(0.001, deadline - loop.time())))
             if granted.error is not None:
                 raise granted.error
@@ -151,8 +151,8 @@ class WebsitePollTransport:
                 await finish({"state": "RECOVER_ONLY"})
             else:
                 reservation = WebsitePollAccess(**access.model_dump(), poll_id=granted.value.poll_id,
-                    supplier_instance_id=self.supplier_instance_id,
-                    process_incarnation_id=self.process_incarnation_id)
+                    supplier_instance_id=supplier_id,
+                    process_incarnation_id=process_id)
                 while not cancelled and loop.time() < deadline - 0.05:
                     # Reserve a small final-write budget inside the 20s request bound.
                     work = await joined(self.client.work(reservation),

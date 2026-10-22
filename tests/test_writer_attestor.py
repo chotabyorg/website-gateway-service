@@ -10,7 +10,7 @@ from uuid import uuid4
 import pytest
 
 from services.writer_attestor import (
-    Parent, WriterAttestor, AttestationUnavailable, registration_id, join_owned,
+    Parent, Producer, WriterAttestor, AttestationUnavailable, registration_id, join_owned,
     validate_descriptor,
 )
 from services.legacy_drain import LegacyDrain
@@ -333,3 +333,165 @@ asyncio.run(run())
             for fd in (ready_r, ready_w, release_r, release_w):
                 if fd is not None:
                     os.close(fd)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["register", "witness"])
+async def test_unix_timeout_retries_share_one_retained_operation_and_bounded_waiters(stage):
+    import aiohttp
+    from aiohttp import web
+    peer = DurablePeer()
+    parent = Parent(peer, [SCOPE])
+    desc = descriptor(parent)
+    rid = registration_id(desc)
+    registration = dict(registration_id=rid, descriptor=desc)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_post = peer.post
+    async def blocked(route, payload):
+        if route == stage:
+            entered.set()
+            await release.wait()
+        return await original_post(route, payload)
+    if stage == "witness":
+        await parent.register(registration)
+    peer.post = blocked
+    import tempfile
+    from pathlib import Path
+    directory = tempfile.TemporaryDirectory(prefix="attestor-r1-")
+    path = Path(directory.name) / "ipc.sock"
+    app = web.Application(client_max_size=16384)
+    app.router.add_post("/register", parent.handle)
+    app.router.add_post("/joined", parent.handle)
+    runner = web.AppRunner(app, access_log=None)
+    await runner.setup()
+    await web.UnixSite(runner, str(path)).start()
+    route = "register" if stage == "register" else "joined"
+    payload = registration if stage == "register" else dict(registration_id=rid)
+    try:
+        async with aiohttp.ClientSession(connector=aiohttp.UnixConnector(path=str(path))) as client:
+            async def timed_request():
+                try:
+                    async with client.post("http://localhost/" + route, json=payload,
+                            headers={"X-Local-Capability": parent.secret},
+                            timeout=aiohttp.ClientTimeout(total=.005)) as response:
+                        assert response.status == 503
+                except TimeoutError:
+                    pass
+            for _ in range(25):
+                await timed_request()
+            await entered.wait()
+            assert len(parent.slots) == 1
+            assert len(parent.operations) == 1
+            assert parent.requests <= parent.MAX_REQUESTS
+            # A concurrent retry burst is bounded too; it cannot enqueue stage work.
+            await asyncio.gather(*(timed_request() for _ in range(100)))
+            assert len(parent.operations) == 1
+            assert parent.requests <= parent.MAX_REQUESTS
+            witness = copy.deepcopy(parent.slots[rid]["witness"])
+            release.set()
+            await asyncio.wait_for(asyncio.gather(*tuple(parent.operations)), 2)
+            async with client.post("http://localhost/" + route, json=payload,
+                    headers={"X-Local-Capability": parent.secret}) as response:
+                assert response.status == 200
+                ack = await response.json()
+                assert ack["registration_id"] == rid
+                assert ack["state"] == ("OPEN" if stage == "register" else "CLOSED")
+            calls = [value for operation, value in peer.calls if operation == stage]
+            assert len(calls) == 1
+            if stage == "witness":
+                assert peer.witnesses[rid] == witness
+                # Register replay must never return stale OPEN after a close.
+                assert (await parent.register(registration))["state"] == "CLOSED"
+    finally:
+        release.set()
+        await asyncio.gather(*tuple(parent.operations), return_exceptions=True)
+        await runner.cleanup()
+        directory.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,code", [(403, "FORBIDDEN"), (404, "NOT_FOUND"),
+                                        (409, "INVALID_DELIVERY_TRANSITION")])
+async def test_definitive_registration_rejection_does_not_block_owned_child_replacement(status, code):
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    calls = []
+    async def reject(request):
+        calls.append(request.path)
+        return web.json_response({"detail": {"code": code}}, status=status)
+    app = web.Application()
+    app.router.add_post("/internal/v1/writer-attestations/{route}", reject)
+    async with TestServer(app) as server:
+        parent = Parent(Producer(str(server.make_url("")), "x" * 32), [SCOPE])
+        desc = descriptor(parent)
+        child = '''import asyncio,json,os
+from services.writer_attestor import WriterAttestor,AttestationUnavailable
+async def main():
+    try:
+        await WriterAttestor().register(json.loads(os.environ['TEST_DESCRIPTOR']))
+    except AttestationUnavailable:
+        pass
+    else:
+        raise AssertionError('rejected registration returned permission')
+asyncio.run(main())
+'''
+        env = dict(os.environ, WRITER_ATTESTOR_SCOPES=json.dumps([SCOPE]), TEST_DESCRIPTOR=json.dumps(desc))
+        run = asyncio.create_task(parent.run_child([sys.executable, "-c", child], environment=env))
+        try:
+            assert await asyncio.wait_for(asyncio.shield(run), 5) == 0
+        finally:
+            if parent.child is not None and parent.child.returncode is None:
+                parent.child.kill()
+                await parent.child.wait()
+            if not run.done():
+                for pending in tuple(parent.operations):
+                    pending.cancel()
+                run.cancel()
+                await asyncio.gather(run, *tuple(parent.operations), return_exceptions=True)
+        assert parent.waited and len(calls) == 1
+        slot = parent.slots[registration_id(desc)]
+        assert slot["rejected"] and not slot["registered"] and slot["witness"] is None
+        assert not parent.operations
+        replacement = Parent(parent.producer, [SCOPE])
+        assert await replacement.run_child([sys.executable, "-c", "pass"]) == 0
+        assert replacement.process != parent.process
+
+
+@pytest.mark.asyncio
+async def test_negative_after_ambiguous_registration_never_erases_possible_commit():
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    peer = DurablePeer()
+    negative, allow_ack = asyncio.Event(), asyncio.Event()
+    attempts = 0
+    async def endpoint(request):
+        nonlocal attempts
+        route, payload = request.match_info["route"], await request.json()
+        if route == "register":
+            attempts += 1
+            if attempts == 1:
+                await peer.post(route, payload)  # A commit whose response is lost/500.
+                return web.Response(status=500)
+            if not allow_ack.is_set():
+                negative.set()
+                return web.json_response({"detail": {"code": "FORBIDDEN"}}, status=403)
+        return web.json_response(await peer.post(route, payload))
+    app = web.Application()
+    app.router.add_post("/internal/v1/writer-attestations/{route}", endpoint)
+    async with TestServer(app) as server:
+        parent = Parent(Producer(str(server.make_url("")), "x" * 32), [SCOPE])
+        desc = descriptor(parent)
+        rid = registration_id(desc)
+        task, slot = parent.registration_task(dict(registration_id=rid, descriptor=desc))
+        run = asyncio.create_task(parent.run_child([sys.executable, "-c", "pass"]))
+        try:
+            await asyncio.wait_for(negative.wait(), 3)
+            assert parent.waited and not run.done() and not task.done()
+            assert not slot["rejected"] and not peer.witnesses
+            allow_ack.set()
+            await asyncio.wait_for(run, 3)
+            assert slot["registered"] and slot["closed"] and not slot["rejected"]
+            assert peer.witnesses[rid]["proof_kind"] == "PROCESS_TERMINATED"
+        finally:
+            allow_ack.set()
+            await asyncio.wait_for(run, 3)

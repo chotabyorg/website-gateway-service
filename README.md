@@ -462,3 +462,14 @@ before/after durable evidence, lost registration/witness ACKs, wrong IDs, repeat
 cancellation and positive joins. Linux PR CI also builds the image without
 publishing it. There are no local Docker, production, provider or model calls
 in these tests. Rollout still requires exact-source/image/security/authority review.
+
+Attestor retry bounds: each immutable slot retains at most one registration task
+and one closure task. Local retries observe those same operations; at most 64
+IPC request/body waiters are admitted, and a pending response returns 503 after
+100 ms while its durable work continues. The child retries that pending status
+without creating a new descriptor or witness. A recognized authoritative initial
+registration denial (authentication/scope, missing intent, or losing-contender
+transition conflict) is retained as rejected and does not block child replacement;
+it creates no witness and permits no Begin. After any ambiguous response, a later
+denial cannot prove that an earlier registration did not commit, so the parent
+retains uncertainty and retries the original registration until positively resolved.

@@ -27,6 +27,14 @@ class AttestationUnavailable(RuntimeError):
         super().__init__("writer_attestation_unavailable")
 
 
+class LocalPending(AttestationUnavailable):
+    """The bounded IPC waiter ended; retained parent work remains pending."""
+
+
+class RegistrationRejected(AttestationUnavailable):
+    """Authoritative rejection of this registration request, never termination."""
+
+
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
@@ -155,6 +163,8 @@ class WriterAttestor:
                 async with session.post("http://localhost/" + operation, json=payload,
                         headers={"X-Local-Capability": self.secret}) as response:
                     raw = await response.content.read(4097)
+                    if response.status == 503:
+                        raise LocalPending()
                     if response.status != 200 or len(raw) > 4096:
                         raise AttestationUnavailable()
                     receipt = json.loads(raw)
@@ -166,6 +176,8 @@ class WriterAttestor:
                             or type(receipt["replayed"]) is not bool):
                         raise AttestationUnavailable()
                     return receipt
+        except LocalPending:
+            raise
         except Exception:
             raise AttestationUnavailable() from None
 
@@ -174,7 +186,12 @@ class WriterAttestor:
         rid = registration_id(descriptor)
         if rid in self.closed:
             raise AttestationUnavailable()
-        receipt = await self._call("register", {"registration_id": rid, "descriptor": descriptor})
+        while True:
+            try:
+                receipt = await self._call("register", {"registration_id": rid, "descriptor": descriptor})
+                break
+            except LocalPending:
+                await asyncio.sleep(0.1)
         if receipt["state"] != "OPEN":
             self.closed.add(rid)
             raise AttestationUnavailable()
@@ -205,9 +222,17 @@ class Producer:
                     json=payload, allow_redirects=False,
                     headers={"X-Writer-Producer-Token": self.token}) as response:
                 raw = await response.content.read(4097)
-                if response.status != 200 or len(raw) > 4096:
+                if len(raw) > 4096:
                     raise AttestationUnavailable()
                 ack = json.loads(raw)
+                if route == "register" and response.status in {401, 403, 404, 409}:
+                    detail = ack.get("detail") if isinstance(ack, dict) else None
+                    expected = {401: "UNAUTHENTICATED", 403: "FORBIDDEN", 404: "NOT_FOUND",
+                                409: "INVALID_DELIVERY_TRANSITION"}
+                    if isinstance(detail, dict) and detail.get("code") == expected[response.status]:
+                        raise RegistrationRejected()
+                if response.status != 200:
+                    raise AttestationUnavailable()
                 if (set(ack) != {"contract_version", "registration_id", "state", "replayed"}
                         or type(ack["contract_version"]) is not int or ack["contract_version"] != 1
                         or ack["registration_id"] != payload["registration_id"]
@@ -226,18 +251,41 @@ class Parent:
         self.secret = secrets.token_urlsafe(48)
         self.slots = {}
         self.operations = set()
+        self.requests = 0
         self.accepting = True
         self.child = None
         self.waited = False
 
+    # Bound active request/body waiters separately from durable per-slot work.
+    MAX_REQUESTS = 64
+    IPC_WAIT_SECONDS = 0.1
+
+    def _track(self, coroutine):
+        task = asyncio.create_task(coroutine)
+        self.operations.add(task)
+        def finished(done):
+            self.operations.discard(done)
+            # Retained task results are replayable; consume detached failures too.
+            if not done.cancelled():
+                done.exception()
+        task.add_done_callback(finished)
+        return task
+
     async def retry(self, route, payload):
+        ambiguous = False
         while True:
             try:
                 return await self.producer.post(route, payload)
+            except RegistrationRejected:
+                if route == "register" and not ambiguous:
+                    raise
+                # A previous request may have committed before losing its ACK.
+                # A later auth/not-found/conflict cannot erase that uncertainty.
             except Exception:
-                await asyncio.sleep(0.25)
+                ambiguous = True
+            await asyncio.sleep(0.25)
 
-    async def register(self, payload):
+    def registration_task(self, payload):
         if not self.accepting or set(payload) != {"registration_id", "descriptor"}:
             raise AttestationUnavailable()
         descriptor = payload["descriptor"]
@@ -250,53 +298,94 @@ class Parent:
             if len(self.slots) >= 4096:
                 raise AttestationUnavailable()
             slot = {"registration": {"contract_version": 1, **payload}, "witness": None,
-                    "lock": asyncio.Lock(), "registered": False, "closed": False}
+                    "registered": False, "closed": False, "rejected": False,
+                    "register_task": None, "witness_task": None}
             self.slots[rid] = slot
-        async with slot["lock"]:
-            ack = await self.retry("register", slot["registration"])
-            slot["registered"] = True
-            return ack
+            slot["register_task"] = self._track(self._register(slot))
+        return slot["register_task"], slot
 
-    async def close(self, rid, kind):
+    async def _register(self, slot):
+        try:
+            ack = await self.retry("register", slot["registration"])
+        except RegistrationRejected:
+            slot["rejected"] = True
+            raise
+        slot["registered"] = True
+        slot["closed"] = ack["state"] == "CLOSED"
+        return ack
+
+    @staticmethod
+    def registration_receipt(ack, slot):
+        if slot["closed"]:
+            return {**ack, "state": "CLOSED", "replayed": True}
+        return ack
+
+    async def register(self, payload):
+        task, slot = self.registration_task(payload)
+        ack = await asyncio.shield(task)
+        return self.registration_receipt(ack, slot)
+
+    def closure_task(self, rid, kind):
         if kind == "PROCESS_TERMINATED" and not self.waited:
             raise AttestationUnavailable()
         slot = self.slots.get(rid)
         if slot is None:
             raise AttestationUnavailable()
-        async with slot["lock"]:
-            if slot["witness"] is None:
-                slot["witness"] = {"contract_version": 1, "registration_id": rid,
-                    "proof_ref": str(uuid4()), "proof_kind": kind, "fenced": True,
-                    "tasks_ended": True, "observed_at": datetime.now(timezone.utc).isoformat()}
-            if not slot["registered"]:
-                await self.retry("register", slot["registration"])
-                slot["registered"] = True
-            ack = await self.retry("witness", slot["witness"])
-            slot["closed"] = True
-            return ack
+        if slot["witness_task"] is None:
+            # Only one first observation and one retained operation per stage.
+            slot["witness_task"] = self._track(self._close(slot, rid, kind))
+        return slot["witness_task"]
+
+    async def _close(self, slot, rid, kind):
+        try:
+            await asyncio.shield(slot["register_task"])
+        except RegistrationRejected:
+            # Definitively unregistered: child never got send-capable Begin access.
+            # Do not manufacture a closure witness for this rejected contender.
+            return None
+        if slot["witness"] is None:
+            slot["witness"] = {"contract_version": 1, "registration_id": rid,
+                "proof_ref": str(uuid4()), "proof_kind": kind, "fenced": True,
+                "tasks_ended": True, "observed_at": datetime.now(timezone.utc).isoformat()}
+        ack = await self.retry("witness", slot["witness"])
+        slot["closed"] = True
+        return ack
+
+    async def close(self, rid, kind):
+        return await asyncio.shield(self.closure_task(rid, kind))
 
     async def handle(self, request):
         if (not self.accepting or not hmac.compare_digest(
                 request.headers.get("X-Local-Capability", ""), self.secret)):
             return web.json_response({"error": "unavailable"}, status=403)
+        if self.requests >= self.MAX_REQUESTS:
+            return web.json_response({"error": "unavailable"}, status=503)
+        self.requests += 1
         try:
-            payload = await request.json()
+            payload = await asyncio.wait_for(request.json(), timeout=1)
             if not isinstance(payload, dict):
                 raise AttestationUnavailable()
+            slot = None
             if request.path == "/register":
-                coroutine = self.register(payload)
+                task, slot = self.registration_task(payload)
             elif request.path == "/joined" and set(payload) == {"registration_id"}:
-                coroutine = self.close(payload["registration_id"], "TASKS_FENCED_AND_JOINED")
+                task = self.closure_task(payload["registration_id"], "TASKS_FENCED_AND_JOINED")
             else:
                 raise AttestationUnavailable()
-            task = asyncio.create_task(coroutine)
-            self.operations.add(task)
-            task.add_done_callback(self.operations.discard)
-            # Client timeout/disconnect cannot discard a retained observation.
-            result = await asyncio.shield(task)
+            # The request waiter is bounded, but durable work survives disconnect
+            # and retries observe that same immutable operation rather than queue.
+            result = await asyncio.wait_for(asyncio.shield(task), self.IPC_WAIT_SECONDS)
+            if result is None:
+                raise RegistrationRejected()
+            if slot is not None:
+                result = self.registration_receipt(result, slot)
             return web.json_response(result)
+        except TimeoutError:
+            return web.json_response({"error": "unavailable"}, status=503)
         except Exception:
             return web.json_response({"error": "unavailable"}, status=400)
+        finally:
+            self.requests -= 1
 
     def child_environment(self, socket_path, environment=None):
         env = dict(os.environ if environment is None else environment)
